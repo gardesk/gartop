@@ -1,0 +1,11 @@
+[package]
+name = "gartop-ipc"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "IPC protocol types for gartop system monitor"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

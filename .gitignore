@@ -1,0 +1,15 @@
+# Build artifacts
+/target/
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Documentation and planning
+/docs/
+
+# Claude
+.claude/
