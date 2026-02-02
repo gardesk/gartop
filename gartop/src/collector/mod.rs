@@ -2,4 +2,12 @@
 //!
 //! Collects CPU, memory, and process data from procfs.
 
-// TODO: Sprint 2 - implement collectors
+mod cpu;
+mod history;
+mod memory;
+mod process;
+
+pub use cpu::CpuCollector;
+pub use history::History;
+pub use memory::MemoryCollector;
+pub use process::ProcessCollector;
