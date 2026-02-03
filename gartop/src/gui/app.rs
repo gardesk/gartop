@@ -366,8 +366,8 @@ impl App {
         self.renderer.fill_rect(backdrop, gartk_core::Color::new(0.0, 0.0, 0.0, 0.75))?;
 
         // Help box dimensions
-        let box_width = 340u32;
-        let box_height = 380u32;
+        let box_width = 320u32;
+        let box_height = 360u32;
         let box_x = (self.width.saturating_sub(box_width)) / 2;
         let box_y = (self.height.saturating_sub(box_height)) / 2;
 
@@ -382,56 +382,60 @@ impl App {
             color: self.theme.text,
             ..Default::default()
         };
-        let x = box_x as f64 + 20.0;
-        let mut y = box_y as f64 + 24.0;
+        let x = box_x as f64 + 16.0;
+        let mut y = box_y as f64 + 20.0;
         self.renderer.text("Keyboard Shortcuts", x, y, &title_style)?;
 
         // Separator
-        y += 24.0;
-        self.renderer.line(x, y, x + box_width as f64 - 40.0, y, self.theme.border, 1.0)?;
-        y += 16.0;
+        y += 22.0;
+        self.renderer.line(x, y, x + box_width as f64 - 32.0, y, self.theme.border, 1.0)?;
+        y += 12.0;
 
         // Keybindings
         let key_style = TextStyle {
             font_family: "monospace".to_string(),
-            font_size: 11.0,
+            font_size: 10.0,
             color: self.theme.cpu_color,
             ..Default::default()
         };
         let desc_style = TextStyle {
             font_family: "monospace".to_string(),
-            font_size: 11.0,
+            font_size: 10.0,
             color: self.theme.text_secondary,
             ..Default::default()
         };
 
+        // Column offset for descriptions
+        let desc_x = x + 90.0;
+
         let bindings = [
             ("?", "Toggle this help"),
-            ("q / Esc", "Quit (Esc clears search first)"),
+            ("q / Esc", "Quit / clear search"),
             ("", ""),
-            ("1-4", "Switch to tab (CPU/Mem/Net/Disk)"),
-            ("Tab", "Cycle through tabs"),
+            ("1-4", "Switch tab"),
+            ("Tab", "Cycle tabs"),
             ("", ""),
-            ("j / \u{2193}", "Select next process"),
-            ("k / \u{2191}", "Select previous process"),
-            ("Home / End", "Jump to first / last"),
-            ("PgUp / PgDn", "Jump 10 rows"),
+            ("j / \u{2193}", "Next process"),
+            ("k / \u{2191}", "Previous process"),
+            ("Home", "First process"),
+            ("End", "Last process"),
+            ("PgUp/PgDn", "Jump 10 rows"),
             ("", ""),
-            ("f", "Freeze process list"),
-            ("/", "Search / filter by name"),
+            ("f", "Freeze list"),
+            ("/", "Search by name"),
             ("", ""),
-            ("K", "Kill selected (SIGTERM)"),
-            ("X", "Force kill (SIGKILL)"),
-            ("r", "Force refresh"),
+            ("K", "Kill (SIGTERM)"),
+            ("X", "Kill (SIGKILL)"),
+            ("r", "Refresh"),
         ];
 
         for (key, desc) in bindings {
             if key.is_empty() {
-                y += 8.0; // Spacer
+                y += 6.0; // Spacer
             } else {
                 self.renderer.text(key, x, y, &key_style)?;
-                self.renderer.text(desc, x + 100.0, y, &desc_style)?;
-                y += 18.0;
+                self.renderer.text(desc, desc_x, y, &desc_style)?;
+                y += 16.0;
             }
         }
 
