@@ -12,7 +12,7 @@ use anyhow::Result;
 use gartk_core::{InputEvent, Key, Point, Rect};
 use gartk_render::{Renderer, TextStyle};
 use gartk_x11::{Connection, EventLoop, EventLoopConfig, Window, WindowConfig};
-use gartop_ipc::{Command, CpuStats, DiskStats, MemoryStats, NetworkStats, ProcessInfo, Response, SortField, StatusInfo};
+use gartop_ipc::{Command, CpuStats, DiskStats, MemoryStats, NetworkStats, ProcessInfo, Response, SortField, StatusInfo, TempStats};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Instant;
@@ -58,11 +58,14 @@ pub struct App {
     jump_pattern: String,
     /// Last time a jump character was typed (for timeout)
     jump_time: Option<Instant>,
+    /// Kill confirmation: (pid, signal, process_name)
+    kill_confirm: Option<(i32, i32, String)>,
     status: Option<StatusInfo>,
     cpu_stats: Option<CpuStats>,
     memory_stats: Option<MemoryStats>,
     network_stats: Vec<NetworkStats>,
     disk_stats: Vec<DiskStats>,
+    temp_stats: Option<TempStats>,
     cpu_history: Vec<CpuStats>,
     memory_history: Vec<MemoryStats>,
     network_history: Vec<Vec<NetworkStats>>,
@@ -109,7 +112,20 @@ impl App {
 
         // Create components
         let header = HeaderBar::new(Rect::new(0, 0, width, HEADER_HEIGHT));
-        let tab_bar = TabBar::new(Rect::new(0, HEADER_HEIGHT as i32, width, TAB_BAR_HEIGHT));
+        let mut tab_bar = TabBar::new(Rect::new(0, HEADER_HEIGHT as i32, width, TAB_BAR_HEIGHT));
+
+        // Set initial tab from config (--pane flag for garbar integration)
+        if let Some(ref pane) = config.default_pane {
+            let tab = match pane.as_str() {
+                "cpu" => Tab::Cpu,
+                "memory" => Tab::Memory,
+                "network" => Tab::Network,
+                "disk" => Tab::Disk,
+                _ => Tab::Cpu,
+            };
+            tab_bar.set_active(tab);
+        }
+
         let process_list = Self::create_process_list(width, height);
 
         // Check if daemon is available
@@ -136,11 +152,13 @@ impl App {
             show_help: false,
             jump_pattern: String::new(),
             jump_time: None,
+            kill_confirm: None,
             status: None,
             cpu_stats: None,
             memory_stats: None,
             network_stats: Vec::new(),
             disk_stats: Vec::new(),
+            temp_stats: None,
             cpu_history: Vec::new(),
             memory_history: Vec::new(),
             network_history: Vec::new(),
@@ -259,6 +277,13 @@ impl App {
             }
         }
 
+        // Get temperature stats
+        if let Some(resp) = self.send_command(&Command::GetTemperature) {
+            if resp.success {
+                self.temp_stats = resp.data.and_then(|d| serde_json::from_value(d).ok());
+            }
+        }
+
         // Get processes sorted by current tab's resource (skip when frozen)
         if !self.frozen {
             let sort_field = match self.tab_bar.active() {
@@ -301,6 +326,14 @@ impl App {
             .sum();
 
         self.header.update(uptime, cpu, mem, net_rate, disk_rate);
+
+        // Get maximum temperature across all sensors
+        let max_temp = self.temp_stats.as_ref().and_then(|ts| {
+            ts.sensors.iter()
+                .map(|s| s.temp_celsius)
+                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+        });
+        self.header.update_temp(max_temp);
     }
 
     /// Render the entire UI.
@@ -341,6 +374,11 @@ impl App {
         // Help overlay (rendered on top)
         if self.show_help {
             self.render_help_overlay()?;
+        }
+
+        // Kill confirmation overlay (rendered on top of everything)
+        if let Some((pid, signal, ref name)) = self.kill_confirm {
+            self.render_kill_confirm(pid, signal, name)?;
         }
 
         self.renderer.flush();
@@ -457,6 +495,56 @@ impl App {
         Ok(())
     }
 
+    /// Render kill confirmation overlay.
+    fn render_kill_confirm(&self, pid: i32, signal: i32, name: &str) -> Result<()> {
+        // Semi-transparent backdrop
+        let backdrop = Rect::new(0, 0, self.width, self.height);
+        self.renderer.fill_rect(backdrop, gartk_core::Color::new(0.0, 0.0, 0.0, 0.6))?;
+
+        // Confirmation box
+        let box_width = 280u32;
+        let box_height = 80u32;
+        let box_x = (self.width.saturating_sub(box_width)) / 2;
+        let box_y = (self.height.saturating_sub(box_height)) / 2;
+
+        let confirm_rect = Rect::new(box_x as i32, box_y as i32, box_width, box_height);
+        self.renderer.fill_rounded_rect(confirm_rect, 8.0, self.theme.panel_bg)?;
+
+        // Border with warning color
+        let border_color = if signal == 9 {
+            gartk_core::Color::new(0.9, 0.3, 0.3, 1.0) // Red for SIGKILL
+        } else {
+            gartk_core::Color::new(0.9, 0.7, 0.3, 1.0) // Orange for SIGTERM
+        };
+        self.renderer.stroke_rounded_rect(confirm_rect, 8.0, border_color, 2.0)?;
+
+        let x = box_x as f64 + 16.0;
+        let mut y = box_y as f64 + 24.0;
+
+        // Signal type
+        let signal_name = if signal == 9 { "SIGKILL" } else { "SIGTERM" };
+        let title_style = TextStyle {
+            font_family: "monospace".to_string(),
+            font_size: 12.0,
+            color: self.theme.text,
+            ..Default::default()
+        };
+        let msg = format!("Kill {} (PID {}) with {}?", name, pid, signal_name);
+        self.renderer.text(&msg, x, y, &title_style)?;
+
+        // Prompt
+        y += 28.0;
+        let prompt_style = TextStyle {
+            font_family: "monospace".to_string(),
+            font_size: 11.0,
+            color: self.theme.text_secondary,
+            ..Default::default()
+        };
+        self.renderer.text("[y] Yes   [n/Esc] Cancel", x, y, &prompt_style)?;
+
+        Ok(())
+    }
+
     /// Render the content for the active tab.
     fn render_tab_content(&self, content_y: i32, _content_height: u32) -> Result<()> {
         let graph_width = self.width - (CONTENT_PADDING * 2);
@@ -514,6 +602,71 @@ impl App {
                 let mut cpu_series = DataSeries::new("CPU", self.theme.cpu_color);
                 cpu_series.set_values(self.cpu_history.iter().map(|s| s.usage_percent).collect());
                 graph.render(&ctx, graph_rect, &[cpu_series], &self.theme);
+
+                // Per-core bars below the graph
+                if let Some(cpu) = &self.cpu_stats {
+                    let bar_y = y + GRAPH_HEIGHT as i32 + 8;
+                    let bar_height = 12.0;
+                    let bar_spacing = 4.0;
+                    let label_width = 50.0;
+                    let max_bar_width = (graph_width as f64 - label_width - 8.0).max(100.0);
+
+                    let label_style = TextStyle {
+                        font_family: "monospace".to_string(),
+                        font_size: 9.0,
+                        color: self.theme.text_secondary,
+                        ..Default::default()
+                    };
+
+                    let value_style = TextStyle {
+                        font_family: "monospace".to_string(),
+                        font_size: 9.0,
+                        color: self.theme.text,
+                        ..Default::default()
+                    };
+
+                    for (i, usage) in cpu.per_core.iter().enumerate() {
+                        let core_y = bar_y as f64 + (i as f64 * (bar_height + bar_spacing));
+
+                        // Core label
+                        let label = format!("Core {}", i);
+                        self.renderer.text(
+                            &label,
+                            CONTENT_PADDING as f64,
+                            core_y + 9.0,
+                            &label_style,
+                        )?;
+
+                        // Background bar
+                        let bar_x = CONTENT_PADDING as f64 + label_width;
+                        let bar_rect = Rect::new(
+                            bar_x as i32,
+                            core_y as i32,
+                            max_bar_width as u32,
+                            bar_height as u32,
+                        );
+                        self.renderer.fill_rect(bar_rect, self.theme.graph_bg)?;
+
+                        // Usage bar
+                        let usage_width = (max_bar_width * (*usage / 100.0)).max(1.0);
+                        let usage_rect = Rect::new(
+                            bar_x as i32,
+                            core_y as i32,
+                            usage_width as u32,
+                            bar_height as u32,
+                        );
+                        self.renderer.fill_rect(usage_rect, self.theme.cpu_color)?;
+
+                        // Percentage value
+                        let pct_text = format!("{:.0}%", usage);
+                        self.renderer.text(
+                            &pct_text,
+                            bar_x + max_bar_width + 4.0,
+                            core_y + 9.0,
+                            &value_style,
+                        )?;
+                    }
+                }
             }
 
             Tab::Memory => {
@@ -966,8 +1119,18 @@ impl App {
                 }
 
                 InputEvent::Key(key_event) if key_event.pressed => {
+                    // Kill confirmation mode - y confirms, n/Esc cancels
+                    if let Some((pid, signal, _)) = self.kill_confirm.take() {
+                        match key_event.key {
+                            Key::Char('y') | Key::Char('Y') => {
+                                self.kill_process(pid, signal);
+                            }
+                            _ => {} // Any other key cancels
+                        }
+                        ev_loop.request_redraw();
+                    }
                     // Help overlay - only ? and Escape close it
-                    if self.show_help {
+                    else if self.show_help {
                         match key_event.key {
                             Key::Char('?') | Key::Escape => {
                                 self.show_help = false;
@@ -1122,16 +1285,24 @@ impl App {
                                 }
                                 ev_loop.request_redraw();
                             }
-                            // Kill selected process (K = SIGTERM, X = SIGKILL)
+                            // Kill selected process (K = SIGTERM, X = SIGKILL) - with confirmation
                             Key::Char('K') => {
                                 if let Some(pid) = self.process_list.selected_pid() {
-                                    self.kill_process(pid, 15); // SIGTERM
+                                    let name = self.processes.iter()
+                                        .find(|p| p.pid == pid)
+                                        .map(|p| p.name.clone())
+                                        .unwrap_or_else(|| format!("PID {}", pid));
+                                    self.kill_confirm = Some((pid, 15, name));
                                     ev_loop.request_redraw();
                                 }
                             }
                             Key::Char('X') => {
                                 if let Some(pid) = self.process_list.selected_pid() {
-                                    self.kill_process(pid, 9); // SIGKILL
+                                    let name = self.processes.iter()
+                                        .find(|p| p.pid == pid)
+                                        .map(|p| p.name.clone())
+                                        .unwrap_or_else(|| format!("PID {}", pid));
+                                    self.kill_confirm = Some((pid, 9, name));
                                     ev_loop.request_redraw();
                                 }
                             }
