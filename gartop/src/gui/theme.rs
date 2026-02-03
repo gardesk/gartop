@@ -16,6 +16,7 @@ pub struct Theme {
     pub network_color: Color,
     pub disk_color: Color,
     pub temp_color: Color,
+    pub gpu_color: Color,
     pub border: Color,
     pub graph_bg: Color,
     pub graph_grid: Color,
@@ -38,6 +39,7 @@ impl Default for Theme {
             network_color: Color::from_hex("#94e2d5").unwrap_or(Color::WHITE),
             disk_color: Color::from_hex("#cba6f7").unwrap_or(Color::WHITE),
             temp_color: Color::from_hex("#fab387").unwrap_or(Color::WHITE), // Catppuccin peach
+            gpu_color: Color::from_hex("#89dceb").unwrap_or(Color::WHITE),  // Catppuccin sky
             border: Color::from_hex("#585b70").unwrap_or(Color::WHITE),
             graph_bg: Color::from_hex("#11111b").unwrap_or(Color::BLACK),
             graph_grid: Color::from_hex("#313244").unwrap_or(Color::BLACK),
