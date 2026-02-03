@@ -12,6 +12,7 @@ pub struct HeaderBar {
     memory_usage: f32,
     net_rate: f64,   // Combined rx+tx bytes/sec
     disk_rate: f64,  // Combined read+write bytes/sec
+    max_temp: Option<f64>,  // Maximum temperature reading
 }
 
 impl HeaderBar {
@@ -24,6 +25,7 @@ impl HeaderBar {
             memory_usage: 0.0,
             net_rate: 0.0,
             disk_rate: 0.0,
+            max_temp: None,
         }
     }
 
@@ -34,6 +36,11 @@ impl HeaderBar {
         self.memory_usage = memory;
         self.net_rate = net_rate;
         self.disk_rate = disk_rate;
+    }
+
+    /// Update temperature reading.
+    pub fn update_temp(&mut self, max_temp: Option<f64>) {
+        self.max_temp = max_temp;
     }
 
     /// Render the header bar.
@@ -88,6 +95,15 @@ impl HeaderBar {
             ..stats_style.clone()
         };
 
+        // Temperature indicator (if available)
+        let temp_text = self.max_temp
+            .map(|t| format!("TEMP: {:.0}°C", t))
+            .unwrap_or_default();
+        let temp_style = TextStyle {
+            color: theme.temp_color,
+            ..stats_style.clone()
+        };
+
         // Uptime
         let uptime_text = format!("up {}", self.uptime);
 
@@ -97,6 +113,11 @@ impl HeaderBar {
         let y = self.bounds.y as f64 + (self.bounds.height as f64 * 0.4) + 6.0;
 
         let uptime_width = renderer.measure_text(&uptime_text, &stats_style)?.width as f64;
+        let temp_width = if self.max_temp.is_some() {
+            renderer.measure_text(&temp_text, &temp_style)?.width as f64
+        } else {
+            0.0
+        };
         let disk_width = renderer.measure_text(&disk_text, &disk_style)?.width as f64;
         let net_width = renderer.measure_text(&net_text, &net_style)?.width as f64;
         let mem_width = renderer.measure_text(&mem_text, &mem_style)?.width as f64;
@@ -105,7 +126,12 @@ impl HeaderBar {
         let right_edge = (self.bounds.x + self.bounds.width as i32) as f64;
 
         let uptime_x = right_edge - right_margin - uptime_width;
-        let disk_x = uptime_x - spacing - disk_width;
+        let temp_x = if self.max_temp.is_some() {
+            uptime_x - spacing - temp_width
+        } else {
+            uptime_x
+        };
+        let disk_x = temp_x - spacing - disk_width;
         let net_x = disk_x - spacing - net_width;
         let mem_x = net_x - spacing - mem_width;
         let cpu_x = mem_x - spacing - cpu_width;
@@ -114,6 +140,9 @@ impl HeaderBar {
         renderer.text(&mem_text, mem_x, y, &mem_style)?;
         renderer.text(&net_text, net_x, y, &net_style)?;
         renderer.text(&disk_text, disk_x, y, &disk_style)?;
+        if self.max_temp.is_some() {
+            renderer.text(&temp_text, temp_x, y, &temp_style)?;
+        }
         renderer.text(&uptime_text, uptime_x, y, &stats_style)?;
 
         Ok(())
