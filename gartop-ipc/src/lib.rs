@@ -42,6 +42,8 @@ pub enum Command {
     },
     /// Get current temperature stats.
     GetTemperature,
+    /// Get current GPU stats.
+    GetGpu,
     /// Get running processes.
     GetProcesses {
         #[serde(default)]
@@ -268,6 +270,36 @@ pub struct TempStats {
     pub timestamp: u64,
 }
 
+/// Individual GPU device stats.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuDevice {
+    /// Device name (e.g., "card0", "nvidia0").
+    pub name: String,
+    /// GPU vendor/model if available.
+    pub model: String,
+    /// GPU utilization percentage (0-100).
+    pub usage_percent: f64,
+    /// VRAM used in bytes.
+    pub vram_used: u64,
+    /// VRAM total in bytes.
+    pub vram_total: u64,
+    /// GPU core clock in MHz (if available).
+    pub clock_mhz: Option<u32>,
+    /// GPU temperature in Celsius (if available).
+    pub temp_celsius: Option<f64>,
+    /// Power usage in watts (if available).
+    pub power_watts: Option<f64>,
+}
+
+/// GPU statistics from all devices.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuStats {
+    /// All GPU device readings.
+    pub devices: Vec<GpuDevice>,
+    /// Timestamp (milliseconds since epoch).
+    pub timestamp: u64,
+}
+
 /// Events broadcast to subscribers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -284,6 +316,8 @@ pub enum Event {
     DiskUpdate { disks: Vec<DiskStats> },
     /// Temperature stats updated.
     TempUpdate(TempStats),
+    /// GPU stats updated.
+    GpuUpdate(GpuStats),
 }
 
 /// Daemon status information.
