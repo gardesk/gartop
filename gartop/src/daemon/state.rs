@@ -3,6 +3,7 @@
 use crate::collector::{CpuCollector, DiskCollector, History, MemoryCollector, NetworkCollector, ProcessCollector};
 use crate::error::Result;
 use gartop_ipc::{CpuStats, DiskStats, MemoryStats, NetworkStats, ProcessInfo, SortField};
+use procfs::Current;
 use std::time::Instant;
 
 /// Shared daemon state.
@@ -78,8 +79,10 @@ impl DaemonState {
         Ok(self.processes.clone())
     }
 
-    /// Get daemon uptime in seconds.
+    /// Get system uptime in seconds (from /proc/uptime).
     pub fn uptime_secs(&self) -> u64 {
-        self.started.elapsed().as_secs()
+        procfs::Uptime::current()
+            .map(|u| u.uptime as u64)
+            .unwrap_or(0)
     }
 }
