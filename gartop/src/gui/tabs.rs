@@ -1,4 +1,4 @@
-//! Tab bar component for switching between CPU and Memory views
+//! Tab bar component for switching between CPU, Memory, Network, and Disk views
 
 use gartk_core::{Point, Rect};
 use gartk_render::{Renderer, TextStyle};
@@ -10,12 +10,14 @@ pub enum Tab {
     #[default]
     Cpu,
     Memory,
+    Network,
+    Disk,
 }
 
 impl Tab {
     /// Get all tabs in order.
     pub fn all() -> &'static [Tab] {
-        &[Tab::Cpu, Tab::Memory]
+        &[Tab::Cpu, Tab::Memory, Tab::Network, Tab::Disk]
     }
 
     /// Get tab label.
@@ -23,6 +25,8 @@ impl Tab {
         match self {
             Tab::Cpu => "CPU",
             Tab::Memory => "Memory",
+            Tab::Network => "Network",
+            Tab::Disk => "Disk",
         }
     }
 }
@@ -53,12 +57,12 @@ impl TabBar {
     /// Calculate bounds for each tab.
     fn calculate_tab_bounds(bounds: Rect) -> Vec<Rect> {
         let tabs = Tab::all();
-        let tab_width = 100u32;
+        let tab_width = 80u32;
         let tab_height = bounds.height - 6; // Small bottom margin
         let mut result = Vec::with_capacity(tabs.len());
 
         for (i, _) in tabs.iter().enumerate() {
-            let x = bounds.x + 12 + (i as i32 * (tab_width as i32 + 8));
+            let x = bounds.x + 12 + (i as i32 * (tab_width as i32 + 6));
             let y = bounds.y + 2; // Small top margin
             result.push(Rect::new(x, y, tab_width, tab_height));
         }
@@ -142,6 +146,8 @@ impl TabBar {
                 match tab {
                     Tab::Cpu => theme.cpu_color,
                     Tab::Memory => theme.memory_color,
+                    Tab::Network => theme.network_color,
+                    Tab::Disk => theme.disk_color,
                 }
             } else {
                 theme.text_secondary

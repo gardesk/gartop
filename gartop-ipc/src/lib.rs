@@ -26,6 +26,20 @@ pub enum Command {
         #[serde(default)]
         count: Option<usize>,
     },
+    /// Get current network stats.
+    GetNetwork,
+    /// Get network history.
+    GetNetworkHistory {
+        #[serde(default)]
+        count: Option<usize>,
+    },
+    /// Get current disk I/O stats.
+    GetDisk,
+    /// Get disk I/O history.
+    GetDiskHistory {
+        #[serde(default)]
+        count: Option<usize>,
+    },
     /// Get running processes.
     GetProcesses {
         #[serde(default)]
@@ -156,6 +170,48 @@ pub struct ProcessInfo {
     pub user: String,
 }
 
+/// Network interface statistics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkStats {
+    /// Interface name (e.g., "eth0", "wlan0").
+    pub interface: String,
+    /// Bytes received.
+    pub rx_bytes: u64,
+    /// Bytes transmitted.
+    pub tx_bytes: u64,
+    /// Packets received.
+    pub rx_packets: u64,
+    /// Packets transmitted.
+    pub tx_packets: u64,
+    /// Receive rate in bytes/sec (calculated from delta).
+    pub rx_rate: f64,
+    /// Transmit rate in bytes/sec (calculated from delta).
+    pub tx_rate: f64,
+    /// Timestamp (milliseconds since epoch).
+    pub timestamp: u64,
+}
+
+/// Disk I/O statistics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiskStats {
+    /// Device name (e.g., "sda", "nvme0n1").
+    pub device: String,
+    /// Bytes read.
+    pub read_bytes: u64,
+    /// Bytes written.
+    pub write_bytes: u64,
+    /// Read operations completed.
+    pub reads: u64,
+    /// Write operations completed.
+    pub writes: u64,
+    /// Read rate in bytes/sec (calculated from delta).
+    pub read_rate: f64,
+    /// Write rate in bytes/sec (calculated from delta).
+    pub write_rate: f64,
+    /// Timestamp (milliseconds since epoch).
+    pub timestamp: u64,
+}
+
 /// Events broadcast to subscribers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -166,6 +222,10 @@ pub enum Event {
     MemoryUpdate(MemoryStats),
     /// Process list updated.
     ProcessUpdate { processes: Vec<ProcessInfo> },
+    /// Network stats updated.
+    NetworkUpdate { interfaces: Vec<NetworkStats> },
+    /// Disk stats updated.
+    DiskUpdate { disks: Vec<DiskStats> },
 }
 
 /// Daemon status information.

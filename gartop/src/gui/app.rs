@@ -12,7 +12,7 @@ use anyhow::Result;
 use gartk_core::{InputEvent, Key, Point, Rect};
 use gartk_render::{Renderer, TextStyle};
 use gartk_x11::{Connection, EventLoop, EventLoopConfig, Window, WindowConfig};
-use gartop_ipc::{Command, CpuStats, MemoryStats, ProcessInfo, Response, SortField, StatusInfo};
+use gartop_ipc::{Command, CpuStats, DiskStats, MemoryStats, NetworkStats, ProcessInfo, Response, SortField, StatusInfo};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Instant;
@@ -49,8 +49,12 @@ pub struct App {
     status: Option<StatusInfo>,
     cpu_stats: Option<CpuStats>,
     memory_stats: Option<MemoryStats>,
+    network_stats: Vec<NetworkStats>,
+    disk_stats: Vec<DiskStats>,
     cpu_history: Vec<CpuStats>,
     memory_history: Vec<MemoryStats>,
+    network_history: Vec<Vec<NetworkStats>>,
+    disk_history: Vec<Vec<DiskStats>>,
     processes: Vec<ProcessInfo>,
 }
 
@@ -117,8 +121,12 @@ impl App {
             status: None,
             cpu_stats: None,
             memory_stats: None,
+            network_stats: Vec::new(),
+            disk_stats: Vec::new(),
             cpu_history: Vec::new(),
             memory_history: Vec::new(),
+            network_history: Vec::new(),
+            disk_history: Vec::new(),
             processes: Vec::new(),
         })
     }
@@ -205,10 +213,39 @@ impl App {
             }
         }
 
+        // Get network stats
+        if let Some(resp) = self.send_command(&Command::GetNetwork) {
+            if resp.success {
+                self.network_stats = resp.data.and_then(|d| serde_json::from_value(d).ok()).unwrap_or_default();
+            }
+        }
+
+        // Get network history
+        if let Some(resp) = self.send_command(&Command::GetNetworkHistory { count: Some(60) }) {
+            if resp.success {
+                self.network_history = resp.data.and_then(|d| serde_json::from_value(d).ok()).unwrap_or_default();
+            }
+        }
+
+        // Get disk stats
+        if let Some(resp) = self.send_command(&Command::GetDisk) {
+            if resp.success {
+                self.disk_stats = resp.data.and_then(|d| serde_json::from_value(d).ok()).unwrap_or_default();
+            }
+        }
+
+        // Get disk history
+        if let Some(resp) = self.send_command(&Command::GetDiskHistory { count: Some(60) }) {
+            if resp.success {
+                self.disk_history = resp.data.and_then(|d| serde_json::from_value(d).ok()).unwrap_or_default();
+            }
+        }
+
         // Get processes sorted by current tab's resource
         let sort_field = match self.tab_bar.active() {
             Tab::Cpu => SortField::Cpu,
             Tab::Memory => SortField::Memory,
+            Tab::Network | Tab::Disk => SortField::Cpu, // Default for I/O tabs
         };
         if let Some(resp) = self.send_command(&Command::GetProcesses {
             sort_by: Some(sort_field),
@@ -398,6 +435,140 @@ impl App {
                 }).collect());
                 graph.render(&ctx, graph_rect, &[mem_series, swap_series], &self.theme);
             }
+
+            Tab::Network => {
+                // Network label - show total rx/tx rates across all interfaces
+                let (total_rx, total_tx) = self.network_stats.iter().fold((0.0, 0.0), |acc, s| {
+                    (acc.0 + s.rx_rate, acc.1 + s.tx_rate)
+                });
+                let net_label = format!(
+                    "Network: {} \u{2193} / {} \u{2191}",
+                    format_rate(total_rx),
+                    format_rate(total_tx)
+                );
+                self.renderer.text(
+                    &net_label,
+                    CONTENT_PADDING as f64,
+                    y as f64 + 14.0,
+                    &TextStyle {
+                        font_family: "monospace".to_string(),
+                        font_size: 12.0,
+                        color: self.theme.network_color,
+                        ..Default::default()
+                    },
+                )?;
+
+                // Interface count on right
+                let iface_info = format!("{} interfaces", self.network_stats.len());
+                self.renderer.text(
+                    &iface_info,
+                    (self.width - 100) as f64,
+                    y as f64 + 14.0,
+                    &TextStyle {
+                        font_family: "monospace".to_string(),
+                        font_size: 10.0,
+                        color: self.theme.text_secondary,
+                        ..Default::default()
+                    },
+                )?;
+                y += 20;
+
+                // Network Graph - show rx/tx rates over time
+                let graph_rect = Rect::new(CONTENT_PADDING as i32, y, graph_width, GRAPH_HEIGHT);
+                let mut rx_series = DataSeries::new("Download", self.theme.network_color);
+                let mut tx_series = DataSeries::new("Upload", self.theme.swap_color);
+
+                // Calculate max rate for scaling
+                let max_rate = self.network_history.iter()
+                    .flat_map(|stats| stats.iter().map(|s| s.rx_rate.max(s.tx_rate)))
+                    .fold(1.0, f64::max);
+
+                // Convert rates to percentage of max for graph
+                rx_series.set_values(
+                    self.network_history.iter()
+                        .map(|stats| {
+                            let total: f64 = stats.iter().map(|s| s.rx_rate).sum();
+                            (total / max_rate) * 100.0
+                        })
+                        .collect()
+                );
+                tx_series.set_values(
+                    self.network_history.iter()
+                        .map(|stats| {
+                            let total: f64 = stats.iter().map(|s| s.tx_rate).sum();
+                            (total / max_rate) * 100.0
+                        })
+                        .collect()
+                );
+                graph.render(&ctx, graph_rect, &[rx_series, tx_series], &self.theme);
+            }
+
+            Tab::Disk => {
+                // Disk label - show total read/write rates
+                let (total_read, total_write) = self.disk_stats.iter().fold((0.0, 0.0), |acc, s| {
+                    (acc.0 + s.read_rate, acc.1 + s.write_rate)
+                });
+                let disk_label = format!(
+                    "Disk: {} read / {} write",
+                    format_rate(total_read),
+                    format_rate(total_write)
+                );
+                self.renderer.text(
+                    &disk_label,
+                    CONTENT_PADDING as f64,
+                    y as f64 + 14.0,
+                    &TextStyle {
+                        font_family: "monospace".to_string(),
+                        font_size: 12.0,
+                        color: self.theme.disk_color,
+                        ..Default::default()
+                    },
+                )?;
+
+                // Device count on right
+                let dev_info = format!("{} devices", self.disk_stats.len());
+                self.renderer.text(
+                    &dev_info,
+                    (self.width - 100) as f64,
+                    y as f64 + 14.0,
+                    &TextStyle {
+                        font_family: "monospace".to_string(),
+                        font_size: 10.0,
+                        color: self.theme.text_secondary,
+                        ..Default::default()
+                    },
+                )?;
+                y += 20;
+
+                // Disk Graph - show read/write rates over time
+                let graph_rect = Rect::new(CONTENT_PADDING as i32, y, graph_width, GRAPH_HEIGHT);
+                let mut read_series = DataSeries::new("Read", self.theme.disk_color);
+                let mut write_series = DataSeries::new("Write", self.theme.swap_color);
+
+                // Calculate max rate for scaling
+                let max_rate = self.disk_history.iter()
+                    .flat_map(|stats| stats.iter().map(|s| s.read_rate.max(s.write_rate)))
+                    .fold(1.0, f64::max);
+
+                // Convert rates to percentage of max for graph
+                read_series.set_values(
+                    self.disk_history.iter()
+                        .map(|stats| {
+                            let total: f64 = stats.iter().map(|s| s.read_rate).sum();
+                            (total / max_rate) * 100.0
+                        })
+                        .collect()
+                );
+                write_series.set_values(
+                    self.disk_history.iter()
+                        .map(|stats| {
+                            let total: f64 = stats.iter().map(|s| s.write_rate).sum();
+                            (total / max_rate) * 100.0
+                        })
+                        .collect()
+                );
+                graph.render(&ctx, graph_rect, &[read_series, write_series], &self.theme);
+            }
         }
 
         // Render process list
@@ -463,6 +634,7 @@ impl App {
                 let sort_field = match tab {
                     Tab::Cpu => SortField::Cpu,
                     Tab::Memory => SortField::Memory,
+                    Tab::Network | Tab::Disk => SortField::Cpu,
                 };
                 self.process_list.set_sort(sort_field);
                 // Force refresh to get re-sorted processes
@@ -547,15 +719,28 @@ impl App {
                             self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
                             ev_loop.request_redraw();
                         }
+                        Key::Char('3') => {
+                            self.tab_bar.set_active(Tab::Network);
+                            self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                            ev_loop.request_redraw();
+                        }
+                        Key::Char('4') => {
+                            self.tab_bar.set_active(Tab::Disk);
+                            self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                            ev_loop.request_redraw();
+                        }
                         Key::Tab => {
                             let new_tab = match self.tab_bar.active() {
                                 Tab::Cpu => Tab::Memory,
-                                Tab::Memory => Tab::Cpu,
+                                Tab::Memory => Tab::Network,
+                                Tab::Network => Tab::Disk,
+                                Tab::Disk => Tab::Cpu,
                             };
                             self.tab_bar.set_active(new_tab);
                             let sort_field = match new_tab {
                                 Tab::Cpu => SortField::Cpu,
                                 Tab::Memory => SortField::Memory,
+                                Tab::Network | Tab::Disk => SortField::Cpu,
                             };
                             self.process_list.set_sort(sort_field);
                             self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
@@ -625,5 +810,22 @@ fn format_bytes(bytes: u64) -> String {
         format!("{:.1} KiB", bytes as f64 / KIB as f64)
     } else {
         format!("{} B", bytes)
+    }
+}
+
+/// Format rate (bytes/second) to human-readable string.
+fn format_rate(bytes_per_sec: f64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+
+    if bytes_per_sec >= GIB {
+        format!("{:.1} GiB/s", bytes_per_sec / GIB)
+    } else if bytes_per_sec >= MIB {
+        format!("{:.1} MiB/s", bytes_per_sec / MIB)
+    } else if bytes_per_sec >= KIB {
+        format!("{:.1} KiB/s", bytes_per_sec / KIB)
+    } else {
+        format!("{:.0} B/s", bytes_per_sec)
     }
 }

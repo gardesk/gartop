@@ -22,7 +22,7 @@ pub async fn run(config_path: Option<String>, _foreground: bool) -> Result<()> {
     )?));
     let server = IpcServer::new().await?;
 
-    // CPU/Memory collection loop
+    // CPU/Memory/Network/Disk collection loop
     let sample_interval = std::time::Duration::from_millis(daemon_config.sample_interval_ms);
     let state_clone = state.clone();
     tokio::spawn(async move {
@@ -35,6 +35,12 @@ pub async fn run(config_path: Option<String>, _foreground: bool) -> Result<()> {
             }
             if let Err(e) = s.collect_memory() {
                 debug!("Memory collect error: {}", e);
+            }
+            if let Err(e) = s.collect_network() {
+                debug!("Network collect error: {}", e);
+            }
+            if let Err(e) = s.collect_disk() {
+                debug!("Disk collect error: {}", e);
             }
         }
     });
@@ -106,6 +112,28 @@ async fn handle_client(
                     let data = match count {
                         Some(n) => s.memory_history.last_n(n),
                         None => s.memory_history.to_vec(),
+                    };
+                    Response::ok_with_data(data)
+                }
+                Command::GetNetwork => match s.network_history.latest() {
+                    Some(stats) => Response::ok_with_data(stats),
+                    None => Response::err("No data yet"),
+                },
+                Command::GetNetworkHistory { count } => {
+                    let data = match count {
+                        Some(n) => s.network_history.last_n(n),
+                        None => s.network_history.to_vec(),
+                    };
+                    Response::ok_with_data(data)
+                }
+                Command::GetDisk => match s.disk_history.latest() {
+                    Some(stats) => Response::ok_with_data(stats),
+                    None => Response::err("No data yet"),
+                },
+                Command::GetDiskHistory { count } => {
+                    let data = match count {
+                        Some(n) => s.disk_history.last_n(n),
+                        None => s.disk_history.to_vec(),
                     };
                     Response::ok_with_data(data)
                 }
