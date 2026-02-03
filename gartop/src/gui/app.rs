@@ -60,6 +60,8 @@ pub struct App {
     jump_time: Option<Instant>,
     /// Kill confirmation: (pid, signal, process_name)
     kill_confirm: Option<(i32, i32, String)>,
+    /// Process detail view: PID of process being viewed
+    detail_pid: Option<i32>,
     status: Option<StatusInfo>,
     cpu_stats: Option<CpuStats>,
     memory_stats: Option<MemoryStats>,
@@ -153,6 +155,7 @@ impl App {
             jump_pattern: String::new(),
             jump_time: None,
             kill_confirm: None,
+            detail_pid: None,
             status: None,
             cpu_stats: None,
             memory_stats: None,
@@ -371,6 +374,13 @@ impl App {
             self.render_tab_content(content_y, content_height)?;
         }
 
+        // Process detail view (rendered on top of content)
+        if let Some(pid) = self.detail_pid {
+            if let Some(process) = self.processes.iter().find(|p| p.pid == pid) {
+                self.render_detail_view(process)?;
+            }
+        }
+
         // Help overlay (rendered on top)
         if self.show_help {
             self.render_help_overlay()?;
@@ -462,11 +472,11 @@ impl App {
             ("\u{2191} / \u{2193}", "Navigate list"),
             ("Home / End", "First / last"),
             ("PgUp/PgDn", "Jump 10 rows"),
+            ("Enter", "Process detail"),
             ("", ""),
             ("Alt+f", "Freeze list"),
             ("/", "Search filter"),
             ("a-z", "Fuzzy jump"),
-            ("Backspace", "Delete jump char"),
             ("", ""),
             ("K", "Kill (SIGTERM)"),
             ("X", "Kill (SIGKILL)"),
@@ -541,6 +551,187 @@ impl App {
             ..Default::default()
         };
         self.renderer.text("[y] Yes   [n/Esc] Cancel", x, y, &prompt_style)?;
+
+        Ok(())
+    }
+
+    /// Render process detail view overlay.
+    fn render_detail_view(&self, process: &ProcessInfo) -> Result<()> {
+        // Full-screen backdrop
+        let backdrop = Rect::new(0, 0, self.width, self.height);
+        self.renderer.fill_rect(backdrop, gartk_core::Color::new(0.0, 0.0, 0.0, 0.85))?;
+
+        // Detail panel (slightly smaller than full screen)
+        let margin = 24u32;
+        let panel_rect = Rect::new(
+            margin as i32,
+            margin as i32,
+            self.width - margin * 2,
+            self.height - margin * 2,
+        );
+        self.renderer.fill_rounded_rect(panel_rect, 8.0, self.theme.panel_bg)?;
+
+        let x = margin as f64 + 20.0;
+        let right_col = (self.width / 2) as f64 + 20.0;
+        let mut y = margin as f64 + 24.0;
+
+        // Title
+        let title_style = TextStyle {
+            font_family: "monospace".to_string(),
+            font_size: 14.0,
+            color: self.theme.text,
+            ..Default::default()
+        };
+        let title = format!("Process: {} (PID {})", process.name, process.pid);
+        self.renderer.text(&title, x, y, &title_style)?;
+
+        // Back hint
+        let hint_style = TextStyle {
+            font_family: "monospace".to_string(),
+            font_size: 10.0,
+            color: self.theme.text_secondary,
+            ..Default::default()
+        };
+        self.renderer.text("[Esc] Back", (self.width - margin - 80) as f64, y, &hint_style)?;
+
+        // Separator
+        y += 20.0;
+        self.renderer.line(
+            x, y,
+            (self.width - margin * 2) as f64 + x - 20.0, y,
+            self.theme.border, 1.0
+        )?;
+        y += 16.0;
+
+        // Info labels and values
+        let label_style = TextStyle {
+            font_family: "monospace".to_string(),
+            font_size: 11.0,
+            color: self.theme.text_secondary,
+            ..Default::default()
+        };
+        let value_style = TextStyle {
+            font_family: "monospace".to_string(),
+            font_size: 11.0,
+            color: self.theme.text,
+            ..Default::default()
+        };
+
+        // Left column
+        let row_height = 20.0;
+
+        // State
+        self.renderer.text("State:", x, y, &label_style)?;
+        let state_color = match process.state.as_str() {
+            "R" => self.theme.cpu_color,     // Running
+            "S" => self.theme.memory_color,  // Sleeping
+            "Z" => self.theme.swap_color,    // Zombie
+            "T" => self.theme.disk_color,    // Stopped
+            _ => self.theme.text,
+        };
+        let state_style = TextStyle { color: state_color, ..value_style.clone() };
+        let state_name = match process.state.as_str() {
+            "R" => "Running",
+            "S" => "Sleeping",
+            "D" => "Disk Sleep",
+            "Z" => "Zombie",
+            "T" => "Stopped",
+            "t" => "Tracing",
+            "X" => "Dead",
+            _ => &process.state,
+        };
+        self.renderer.text(state_name, x + 80.0, y, &state_style)?;
+        y += row_height;
+
+        // User
+        self.renderer.text("User:", x, y, &label_style)?;
+        self.renderer.text(&process.user, x + 80.0, y, &value_style)?;
+        y += row_height;
+
+        // CPU
+        self.renderer.text("CPU:", x, y, &label_style)?;
+        let cpu_style = TextStyle { color: self.theme.cpu_color, ..value_style.clone() };
+        self.renderer.text(&format!("{:.1}%", process.cpu_percent), x + 80.0, y, &cpu_style)?;
+        y += row_height;
+
+        // Memory
+        self.renderer.text("Memory:", x, y, &label_style)?;
+        let mem_style = TextStyle { color: self.theme.memory_color, ..value_style.clone() };
+        self.renderer.text(
+            &format!("{} ({:.1}%)", format_bytes(process.rss), process.memory_percent),
+            x + 80.0, y, &mem_style
+        )?;
+        y += row_height;
+
+        // Virtual
+        self.renderer.text("Virtual:", x, y, &label_style)?;
+        self.renderer.text(&format_bytes(process.vsize), x + 80.0, y, &value_style)?;
+
+        // Right column - reset y
+        y = margin as f64 + 24.0 + 20.0 + 16.0;
+
+        // Disk I/O
+        self.renderer.text("Disk Read:", right_col, y, &label_style)?;
+        let disk_style = TextStyle { color: self.theme.disk_color, ..value_style.clone() };
+        self.renderer.text(&format_rate(process.io_read_rate), right_col + 90.0, y, &disk_style)?;
+        y += row_height;
+
+        self.renderer.text("Disk Write:", right_col, y, &label_style)?;
+        self.renderer.text(&format_rate(process.io_write_rate), right_col + 90.0, y, &disk_style)?;
+        y += row_height;
+
+        // Network
+        self.renderer.text("Net Conn:", right_col, y, &label_style)?;
+        let net_style = TextStyle { color: self.theme.network_color, ..value_style.clone() };
+        self.renderer.text(
+            &format!("{} ({} TCP, {} UDP)", process.net_connections, process.net_tcp, process.net_udp),
+            right_col + 90.0, y, &net_style
+        )?;
+        y += row_height;
+
+        self.renderer.text("Net Rate:", right_col, y, &label_style)?;
+        self.renderer.text(
+            &format!("↓{} ↑{}", format_rate(process.net_rx_rate), format_rate(process.net_tx_rate)),
+            right_col + 90.0, y, &net_style
+        )?;
+
+        // Command line section
+        y = margin as f64 + 24.0 + 20.0 + 16.0 + row_height * 6.0;
+        self.renderer.text("Command:", x, y, &label_style)?;
+        y += row_height;
+
+        // Command line (truncate if too long)
+        let cmd_style = TextStyle {
+            font_family: "monospace".to_string(),
+            font_size: 10.0,
+            color: self.theme.text,
+            ..Default::default()
+        };
+        let max_cmd_len = ((self.width - margin * 2 - 40) / 6) as usize; // Approximate char width
+        let cmdline = if process.cmdline.len() > max_cmd_len {
+            format!("{}...", &process.cmdline[..max_cmd_len - 3])
+        } else if process.cmdline.is_empty() {
+            format!("[{}]", process.name)
+        } else {
+            process.cmdline.clone()
+        };
+        self.renderer.text(&cmdline, x, y, &cmd_style)?;
+
+        // Actions footer
+        let footer_y = (self.height - margin - 40) as f64;
+        self.renderer.line(
+            x, footer_y - 8.0,
+            (self.width - margin * 2) as f64 + x - 20.0, footer_y - 8.0,
+            self.theme.border, 1.0
+        )?;
+
+        let action_style = TextStyle {
+            font_family: "monospace".to_string(),
+            font_size: 10.0,
+            color: self.theme.cpu_color,
+            ..Default::default()
+        };
+        self.renderer.text("[K] Kill (SIGTERM)   [X] Kill (SIGKILL)", x, footer_y, &action_style)?;
 
         Ok(())
     }
@@ -1166,6 +1357,36 @@ impl App {
                             }
                             _ => {}
                         }
+                    }
+                    // Detail view mode
+                    else if self.detail_pid.is_some() {
+                        match key_event.key {
+                            Key::Escape => {
+                                self.detail_pid = None;
+                                ev_loop.request_redraw();
+                            }
+                            Key::Char('K') => {
+                                if let Some(pid) = self.detail_pid {
+                                    let name = self.processes.iter()
+                                        .find(|p| p.pid == pid)
+                                        .map(|p| p.name.clone())
+                                        .unwrap_or_else(|| format!("PID {}", pid));
+                                    self.kill_confirm = Some((pid, 15, name));
+                                    ev_loop.request_redraw();
+                                }
+                            }
+                            Key::Char('X') => {
+                                if let Some(pid) = self.detail_pid {
+                                    let name = self.processes.iter()
+                                        .find(|p| p.pid == pid)
+                                        .map(|p| p.name.clone())
+                                        .unwrap_or_else(|| format!("PID {}", pid));
+                                    self.kill_confirm = Some((pid, 9, name));
+                                    ev_loop.request_redraw();
+                                }
+                            }
+                            _ => {}
+                        }
                     } else {
                         // Normal mode key handling
                         match key_event.key {
@@ -1284,6 +1505,13 @@ impl App {
                                     self.process_list.select_prev(&self.processes);
                                 }
                                 ev_loop.request_redraw();
+                            }
+                            // Enter - open process detail view
+                            Key::Return => {
+                                if let Some(pid) = self.process_list.selected_pid() {
+                                    self.detail_pid = Some(pid);
+                                    ev_loop.request_redraw();
+                                }
                             }
                             // Kill selected process (K = SIGTERM, X = SIGKILL) - with confirmation
                             Key::Char('K') => {
