@@ -713,6 +713,14 @@ impl App {
         self.renderer.text(&process.user, x + 80.0, y, &value_style)?;
         y += row_height;
 
+        // Container (if any)
+        if let Some(ref container) = process.container {
+            self.renderer.text("Container:", x, y, &label_style)?;
+            let container_style = TextStyle { color: self.theme.network_color, ..value_style.clone() };
+            self.renderer.text(container, x + 80.0, y, &container_style)?;
+            y += row_height;
+        }
+
         // CPU
         self.renderer.text("CPU:", x, y, &label_style)?;
         let cpu_style = TextStyle { color: self.theme.cpu_color, ..value_style.clone() };
