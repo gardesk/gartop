@@ -20,13 +20,15 @@ impl MemoryCollector {
 
         let total = meminfo.mem_total;
         let free = meminfo.mem_free;
-        let available = meminfo.mem_available.unwrap_or(free);
         let buffers = meminfo.buffers;
         let cached = meminfo.cached;
-        let slab_reclaimable = meminfo.s_reclaimable.unwrap_or(0);
 
-        // Calculate used memory (excluding buffers/cache)
-        let used = total.saturating_sub(free + buffers + cached + slab_reclaimable);
+        // Use MemAvailable (kernel 3.14+) for accurate available memory calculation
+        // Fall back to free + buffers + cached if not available
+        let available = meminfo.mem_available.unwrap_or(free + buffers + cached);
+
+        // Used = total - available (same calculation as garbar)
+        let used = total.saturating_sub(available);
 
         let swap_total = meminfo.swap_total;
         let swap_free = meminfo.swap_free;
