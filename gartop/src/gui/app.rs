@@ -18,7 +18,7 @@ use std::time::Instant;
 use x11rb::protocol::xproto::{ConnectionExt, ImageFormat};
 
 /// Header bar height.
-const HEADER_HEIGHT: u32 = 40;
+const HEADER_HEIGHT: u32 = 48;
 
 /// Graph height.
 const GRAPH_HEIGHT: u32 = 150;

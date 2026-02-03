@@ -54,12 +54,12 @@ impl TabBar {
     fn calculate_tab_bounds(bounds: Rect) -> Vec<Rect> {
         let tabs = Tab::all();
         let tab_width = 100u32;
-        let tab_height = bounds.height - 4;
+        let tab_height = bounds.height - 8; // Leave room for padding
         let mut result = Vec::with_capacity(tabs.len());
 
         for (i, _) in tabs.iter().enumerate() {
             let x = bounds.x + 8 + (i as i32 * (tab_width as i32 + 4));
-            let y = bounds.y + 2;
+            let y = bounds.y + 4; // More top padding
             result.push(Rect::new(x, y, tab_width, tab_height));
         }
 
@@ -120,16 +120,6 @@ impl TabBar {
     pub fn render(&self, renderer: &Renderer, theme: &Theme) -> anyhow::Result<()> {
         // Background
         renderer.fill_rect(self.bounds, theme.panel_bg)?;
-
-        // Bottom border
-        renderer.line(
-            self.bounds.x as f64,
-            (self.bounds.y + self.bounds.height as i32) as f64,
-            (self.bounds.x + self.bounds.width as i32) as f64,
-            (self.bounds.y + self.bounds.height as i32) as f64,
-            theme.border,
-            1.0,
-        )?;
 
         let tabs = Tab::all();
         for (i, tab_rect) in self.tab_bounds.iter().enumerate() {
