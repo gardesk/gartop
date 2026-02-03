@@ -120,6 +120,8 @@ impl SocketCollector {
             let mut socket = Socket::new(NETLINK_SOCK_DIAG)?;
             socket.bind_auto()?;
             socket.connect(&SocketAddr::new(0, 0))?;
+            // Set non-blocking to prevent hanging on recv
+            socket.set_non_blocking(true)?;
             self.nl_socket = Some(socket);
         }
         Ok(())
@@ -284,10 +286,19 @@ impl SocketCollector {
             socket.send(&send_buf, 0)?;
 
             let mut recv_buf = vec![0u8; 65536];
-            loop {
+            let mut done = false;
+            let mut retries = 0;
+            const MAX_RETRIES: u32 = 100; // 100ms max wait
+
+            while !done && retries < MAX_RETRIES {
                 let n = match socket.recv(&mut recv_buf, 0) {
                     Ok(n) => n,
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        // Wait a bit for data to arrive
+                        retries += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        continue;
+                    }
                     Err(e) => return Err(e),
                 };
 
@@ -305,7 +316,10 @@ impl SocketCollector {
                     offset += msg.header.length as usize;
 
                     match msg.payload {
-                        NetlinkPayload::Done(_) => break,
+                        NetlinkPayload::Done(_) => {
+                            done = true;
+                            break;
+                        }
                         NetlinkPayload::Error(e) => {
                             if e.code.is_some() {
                                 return Err(io::Error::new(io::ErrorKind::Other, "netlink error"));
