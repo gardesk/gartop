@@ -3,6 +3,7 @@
 use gartk_core::{Point, Rect};
 use gartk_render::{Renderer, TextStyle};
 use gartop_ipc::{ProcessInfo, SortField};
+use std::collections::HashMap;
 use std::time::Instant;
 use super::theme::Theme;
 
@@ -23,6 +24,70 @@ fn format_rate(bytes_per_sec: f64) -> String {
     } else {
         "0".to_string()
     }
+}
+
+/// Build tree-ordered list of processes with indent levels.
+/// Returns Vec of (process_index_in_original, indent_level, is_last_sibling).
+fn build_tree_order(processes: &[ProcessInfo]) -> Vec<(usize, usize, bool)> {
+    // Build parent -> children map
+    let mut children: HashMap<i32, Vec<usize>> = HashMap::new();
+    let pid_to_idx: HashMap<i32, usize> = processes.iter()
+        .enumerate()
+        .map(|(i, p)| (p.pid, i))
+        .collect();
+
+    // Group processes by parent
+    for (idx, proc) in processes.iter().enumerate() {
+        children.entry(proc.ppid).or_default().push(idx);
+    }
+
+    // Find root processes (parent not in our list, or ppid=0/1)
+    let mut roots: Vec<usize> = Vec::new();
+    for (idx, proc) in processes.iter().enumerate() {
+        if proc.ppid == 0 || proc.ppid == 1 || !pid_to_idx.contains_key(&proc.ppid) {
+            roots.push(idx);
+        }
+    }
+
+    // Sort roots by CPU usage (descending)
+    roots.sort_by(|&a, &b| {
+        processes[b].cpu_percent
+            .partial_cmp(&processes[a].cpu_percent)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // DFS to build ordered list
+    let mut result = Vec::new();
+    fn visit(
+        idx: usize,
+        depth: usize,
+        is_last: bool,
+        children: &HashMap<i32, Vec<usize>>,
+        processes: &[ProcessInfo],
+        result: &mut Vec<(usize, usize, bool)>,
+    ) {
+        result.push((idx, depth, is_last));
+        if let Some(child_indices) = children.get(&processes[idx].pid) {
+            let mut sorted_children = child_indices.clone();
+            // Sort children by CPU
+            sorted_children.sort_by(|&a, &b| {
+                processes[b].cpu_percent
+                    .partial_cmp(&processes[a].cpu_percent)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let len = sorted_children.len();
+            for (i, &child_idx) in sorted_children.iter().enumerate() {
+                visit(child_idx, depth + 1, i == len - 1, children, processes, result);
+            }
+        }
+    }
+
+    let root_count = roots.len();
+    for (i, root_idx) in roots.into_iter().enumerate() {
+        visit(root_idx, 0, i == root_count - 1, &children, processes, &mut result);
+    }
+
+    result
 }
 
 /// Row height for process list.
@@ -306,7 +371,7 @@ impl ProcessList {
     }
 
     /// Render the process list.
-    pub fn render(&self, renderer: &Renderer, theme: &Theme, processes: &[ProcessInfo]) -> anyhow::Result<()> {
+    pub fn render(&self, renderer: &Renderer, theme: &Theme, processes: &[ProcessInfo], tree_view: bool) -> anyhow::Result<()> {
         // Background
         renderer.fill_rect(self.bounds, theme.panel_bg)?;
 
@@ -389,28 +454,48 @@ impl ProcessList {
             1.0,
         )?;
 
+        // Build tree order if needed
+        let tree_order = if tree_view {
+            Some(build_tree_order(processes))
+        } else {
+            None
+        };
+
         // Process rows
         let start_y = self.bounds.y + HEADER_HEIGHT as i32;
-        for (i, process) in processes.iter()
-            .skip(self.scroll_offset)
-            .take(self.visible_rows)
-            .enumerate()
-        {
+        let row_count = if tree_view {
+            tree_order.as_ref().map(|t| t.len()).unwrap_or(0)
+        } else {
+            processes.len()
+        };
+
+        for i in 0..self.visible_rows {
+            let display_idx = self.scroll_offset + i;
+            if display_idx >= row_count {
+                break;
+            }
+
+            // Get process and tree info
+            let (process, indent, _is_last) = if let Some(ref tree) = tree_order {
+                let (orig_idx, indent, is_last) = tree[display_idx];
+                (&processes[orig_idx], indent, is_last)
+            } else {
+                (&processes[display_idx], 0, false)
+            };
+
             let row_y = start_y + (i as i32 * ROW_HEIGHT as i32);
-            let text_y = row_y as f64 + 4.0; // Pango uses top-left positioning
-            let process_idx = self.scroll_offset + i;
+            let text_y = row_y as f64 + 4.0;
 
             // Selection highlight
-            if self.selected_index == Some(process_idx) {
+            if self.selected_index == Some(display_idx) {
                 let row_rect = Rect::new(
                     self.bounds.x + 2,
                     row_y + 2,
                     self.bounds.width - 4,
                     ROW_HEIGHT - 4,
                 );
-                // Use magenta highlight when cursor lost its target
                 let highlight_color = if self.cursor_lost {
-                    gartk_core::Color::new(0.6, 0.2, 0.6, 1.0) // Magenta
+                    gartk_core::Color::new(0.6, 0.2, 0.6, 1.0)
                 } else {
                     theme.header_bg
                 };
@@ -420,13 +505,21 @@ impl ProcessList {
             // PID
             renderer.text(&process.pid.to_string(), col_pid, text_y, &dim_style)?;
 
-            // Name (truncate if too long)
-            let name = if process.name.len() > 18 {
+            // Name with tree prefix
+            let name_with_prefix = if tree_view && indent > 0 {
+                let prefix = "  ".repeat(indent.saturating_sub(1)) + "├─";
+                let max_name_len = 18usize.saturating_sub(prefix.len());
+                if process.name.len() > max_name_len {
+                    format!("{}{:.width$}..", prefix, process.name, width = max_name_len.saturating_sub(2))
+                } else {
+                    format!("{}{}", prefix, process.name)
+                }
+            } else if process.name.len() > 18 {
                 format!("{}...", &process.name[..15])
             } else {
                 process.name.clone()
             };
-            renderer.text(&name, col_name, text_y, &text_style)?;
+            renderer.text(&name_with_prefix, col_name, text_y, &text_style)?;
 
             // Show CPU/Memory or I/O or Network depending on sort field
             if is_disk_sort {
