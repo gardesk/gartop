@@ -48,6 +48,8 @@ pub struct App {
     show_legend: bool,
     /// Freeze mode - pause process list updates for navigation
     frozen: bool,
+    /// Tree view mode - show process hierarchy
+    tree_view: bool,
     /// Search mode - filter processes by name
     search_mode: bool,
     /// Search query string
@@ -149,6 +151,7 @@ impl App {
             refresh_interval,
             show_legend,
             frozen: false,
+            tree_view: false,
             search_mode: false,
             search_query: String::new(),
             show_help: false,
@@ -473,6 +476,7 @@ impl App {
             ("Home / End", "First / last"),
             ("PgUp/PgDn", "Jump 10 rows"),
             ("Enter", "Process detail"),
+            ("t", "Tree view toggle"),
             ("", ""),
             ("Alt+f", "Freeze list"),
             ("/", "Search filter"),
@@ -1099,7 +1103,7 @@ impl App {
         };
 
         // Render process list with filtered processes
-        self.process_list.render(&self.renderer, &self.theme, &display_processes)?;
+        self.process_list.render(&self.renderer, &self.theme, &display_processes, self.tree_view)?;
 
         Ok(())
     }
@@ -1417,6 +1421,10 @@ impl App {
                             }
                             Key::Char('r') => {
                                 self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                            }
+                            Key::Char('t') => {
+                                self.tree_view = !self.tree_view;
+                                ev_loop.request_redraw();
                             }
                             Key::Char('1') => {
                                 self.tab_bar.set_active(Tab::Cpu);
