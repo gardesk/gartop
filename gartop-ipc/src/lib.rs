@@ -40,6 +40,8 @@ pub enum Command {
         #[serde(default)]
         count: Option<usize>,
     },
+    /// Get current temperature stats.
+    GetTemperature,
     /// Get running processes.
     GetProcesses {
         #[serde(default)]
@@ -240,6 +242,30 @@ pub struct DiskStats {
     pub timestamp: u64,
 }
 
+/// Individual temperature sensor reading.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TempSensor {
+    /// Sensor label (e.g., "Core 0", "Package id 0", "GPU").
+    pub label: String,
+    /// Hardware device name (e.g., "coretemp", "k10temp", "amdgpu").
+    pub device: String,
+    /// Temperature in degrees Celsius.
+    pub temp_celsius: f64,
+    /// Critical temperature threshold (if available).
+    pub critical: Option<f64>,
+    /// High temperature threshold (if available).
+    pub high: Option<f64>,
+}
+
+/// Temperature statistics from all sensors.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TempStats {
+    /// All temperature sensor readings.
+    pub sensors: Vec<TempSensor>,
+    /// Timestamp (milliseconds since epoch).
+    pub timestamp: u64,
+}
+
 /// Events broadcast to subscribers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -254,6 +280,8 @@ pub enum Event {
     NetworkUpdate { interfaces: Vec<NetworkStats> },
     /// Disk stats updated.
     DiskUpdate { disks: Vec<DiskStats> },
+    /// Temperature stats updated.
+    TempUpdate(TempStats),
 }
 
 /// Daemon status information.
