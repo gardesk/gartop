@@ -52,6 +52,8 @@ pub struct App {
     search_mode: bool,
     /// Search query string
     search_query: String,
+    /// Help overlay visible
+    show_help: bool,
     status: Option<StatusInfo>,
     cpu_stats: Option<CpuStats>,
     memory_stats: Option<MemoryStats>,
@@ -127,6 +129,7 @@ impl App {
             frozen: false,
             search_mode: false,
             search_query: String::new(),
+            show_help: false,
             status: None,
             cpu_stats: None,
             memory_stats: None,
@@ -329,6 +332,11 @@ impl App {
             self.render_tab_content(content_y, content_height)?;
         }
 
+        // Help overlay (rendered on top)
+        if self.show_help {
+            self.render_help_overlay()?;
+        }
+
         self.renderer.flush();
         Ok(())
     }
@@ -348,6 +356,94 @@ impl App {
 
         self.renderer.text("Not connected to daemon", 20.0, content_y as f64 + 40.0, &style)?;
         self.renderer.text("Run: gartop daemon", 20.0, content_y as f64 + 65.0, &dim_style)?;
+        Ok(())
+    }
+
+    /// Render help overlay with keybindings.
+    fn render_help_overlay(&self) -> Result<()> {
+        // Semi-transparent backdrop
+        let backdrop = Rect::new(0, 0, self.width, self.height);
+        self.renderer.fill_rect(backdrop, gartk_core::Color::new(0.0, 0.0, 0.0, 0.75))?;
+
+        // Help box dimensions
+        let box_width = 340u32;
+        let box_height = 380u32;
+        let box_x = (self.width.saturating_sub(box_width)) / 2;
+        let box_y = (self.height.saturating_sub(box_height)) / 2;
+
+        // Help box background
+        let help_rect = Rect::new(box_x as i32, box_y as i32, box_width, box_height);
+        self.renderer.fill_rounded_rect(help_rect, 8.0, self.theme.panel_bg)?;
+
+        // Title
+        let title_style = TextStyle {
+            font_family: "monospace".to_string(),
+            font_size: 14.0,
+            color: self.theme.text,
+            ..Default::default()
+        };
+        let x = box_x as f64 + 20.0;
+        let mut y = box_y as f64 + 24.0;
+        self.renderer.text("Keyboard Shortcuts", x, y, &title_style)?;
+
+        // Separator
+        y += 24.0;
+        self.renderer.line(x, y, x + box_width as f64 - 40.0, y, self.theme.border, 1.0)?;
+        y += 16.0;
+
+        // Keybindings
+        let key_style = TextStyle {
+            font_family: "monospace".to_string(),
+            font_size: 11.0,
+            color: self.theme.cpu_color,
+            ..Default::default()
+        };
+        let desc_style = TextStyle {
+            font_family: "monospace".to_string(),
+            font_size: 11.0,
+            color: self.theme.text_secondary,
+            ..Default::default()
+        };
+
+        let bindings = [
+            ("?", "Toggle this help"),
+            ("q / Esc", "Quit (Esc clears search first)"),
+            ("", ""),
+            ("1-4", "Switch to tab (CPU/Mem/Net/Disk)"),
+            ("Tab", "Cycle through tabs"),
+            ("", ""),
+            ("j / \u{2193}", "Select next process"),
+            ("k / \u{2191}", "Select previous process"),
+            ("Home / End", "Jump to first / last"),
+            ("PgUp / PgDn", "Jump 10 rows"),
+            ("", ""),
+            ("f", "Freeze process list"),
+            ("/", "Search / filter by name"),
+            ("", ""),
+            ("K", "Kill selected (SIGTERM)"),
+            ("X", "Force kill (SIGKILL)"),
+            ("r", "Force refresh"),
+        ];
+
+        for (key, desc) in bindings {
+            if key.is_empty() {
+                y += 8.0; // Spacer
+            } else {
+                self.renderer.text(key, x, y, &key_style)?;
+                self.renderer.text(desc, x + 100.0, y, &desc_style)?;
+                y += 18.0;
+            }
+        }
+
+        // Footer
+        y = box_y as f64 + box_height as f64 - 30.0;
+        let footer_style = TextStyle {
+            font_size: 9.0,
+            color: self.theme.text_secondary,
+            ..desc_style
+        };
+        self.renderer.text("Press ? or Esc to close", x, y, &footer_style)?;
+
         Ok(())
     }
 
@@ -815,8 +911,18 @@ impl App {
                 }
 
                 InputEvent::Key(key_event) if key_event.pressed => {
+                    // Help overlay - only ? and Escape close it
+                    if self.show_help {
+                        match key_event.key {
+                            Key::Char('?') | Key::Escape => {
+                                self.show_help = false;
+                                ev_loop.request_redraw();
+                            }
+                            _ => {} // Ignore other keys when help is shown
+                        }
+                    }
                     // Search mode input handling
-                    if self.search_mode {
+                    else if self.search_mode {
                         match key_event.key {
                             Key::Escape => {
                                 if self.search_query.is_empty() {
@@ -856,6 +962,10 @@ impl App {
                             }
                             Key::Char('q') => {
                                 self.should_quit = true;
+                            }
+                            Key::Char('?') => {
+                                self.show_help = true;
+                                ev_loop.request_redraw();
                             }
                             Key::Char('/') => {
                                 self.search_mode = true;
