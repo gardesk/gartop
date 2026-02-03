@@ -141,8 +141,8 @@ impl ProcessList {
         let col_mem = x + 300.0;
         let col_user = x + 390.0;
 
-        // Header
-        let header_y = self.bounds.y as f64 + 16.0;
+        // Header - position text near top (Pango uses top-left positioning)
+        let header_y = self.bounds.y as f64 + 4.0;
         renderer.text("PID", col_pid, header_y, &header_style)?;
         renderer.text("Name", col_name, header_y, &header_style)?;
 
@@ -184,7 +184,7 @@ impl ProcessList {
             .enumerate()
         {
             let row_y = start_y + (i as i32 * ROW_HEIGHT as i32);
-            let text_y = row_y as f64 + 16.0;
+            let text_y = row_y as f64 + 4.0; // Pango uses top-left positioning
             let process_idx = self.scroll_offset + i;
 
             // Selection highlight
