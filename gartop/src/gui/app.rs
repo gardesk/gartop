@@ -93,8 +93,7 @@ impl App {
 
         // Create components
         let header = HeaderBar::new(Rect::new(0, 0, width, HEADER_HEIGHT));
-        let tab_bar_y = HEADER_HEIGHT + 4; // Small gap below header
-        let tab_bar = TabBar::new(Rect::new(0, tab_bar_y as i32, width, TAB_BAR_HEIGHT));
+        let tab_bar = TabBar::new(Rect::new(0, HEADER_HEIGHT as i32, width, TAB_BAR_HEIGHT));
         let process_list = Self::create_process_list(width, height);
 
         // Check if daemon is available
@@ -124,9 +123,8 @@ impl App {
 
     /// Create process list with correct bounds.
     fn create_process_list(width: u32, height: u32) -> ProcessList {
-        // Account for: header + gap + tab bar + section gap + graph label + graph + section gap
-        let tab_bar_y = HEADER_HEIGHT + 4;
-        let content_start = tab_bar_y + TAB_BAR_HEIGHT + SECTION_GAP + 20 + GRAPH_HEIGHT + SECTION_GAP;
+        // Account for: header + tab bar + section gap + graph label + graph + section gap
+        let content_start = HEADER_HEIGHT + TAB_BAR_HEIGHT + SECTION_GAP + 20 + GRAPH_HEIGHT + SECTION_GAP;
         let list_height = height.saturating_sub(content_start);
         let list_width = width.saturating_sub(CONTENT_PADDING * 2);
         ProcessList::new(Rect::new(CONTENT_PADDING as i32, content_start as i32, list_width, list_height))
@@ -445,8 +443,7 @@ impl App {
 
         // Update component bounds
         self.header = HeaderBar::new(Rect::new(0, 0, width, HEADER_HEIGHT));
-        let tab_bar_y = HEADER_HEIGHT + 4;
-        self.tab_bar.set_bounds(Rect::new(0, tab_bar_y as i32, width, TAB_BAR_HEIGHT));
+        self.tab_bar.set_bounds(Rect::new(0, HEADER_HEIGHT as i32, width, TAB_BAR_HEIGHT));
         self.process_list = Self::create_process_list(width, height);
         self.process_list.set_processes(self.processes.clone());
 

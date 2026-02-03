@@ -90,16 +90,6 @@ impl HeaderBar {
         renderer.text(&mem_text, mem_x, y, &mem_style)?;
         renderer.text(&uptime_text, uptime_x, y, &stats_style)?;
 
-        // Bottom border
-        renderer.line(
-            self.bounds.x as f64,
-            (self.bounds.y + self.bounds.height as i32) as f64,
-            right_edge,
-            (self.bounds.y + self.bounds.height as i32) as f64,
-            theme.border,
-            1.0,
-        )?;
-
         Ok(())
     }
 
