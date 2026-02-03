@@ -7,6 +7,7 @@ use super::{
     tabs::{Tab, TabBar, TAB_BAR_HEIGHT},
     theme::Theme,
 };
+use crate::config::GuiConfig;
 use anyhow::Result;
 use gartk_core::{InputEvent, Key, Point, Rect};
 use gartk_render::{Renderer, TextStyle};
@@ -29,13 +30,6 @@ const CONTENT_PADDING: u32 = 16;
 /// Vertical gap between sections.
 const SECTION_GAP: u32 = 12;
 
-/// Default window dimensions.
-const DEFAULT_WIDTH: u32 = 800;
-const DEFAULT_HEIGHT: u32 = 600;
-
-/// Data refresh interval (seconds).
-const REFRESH_INTERVAL: f64 = 1.0;
-
 /// GUI application.
 pub struct App {
     window: Window,
@@ -50,6 +44,7 @@ pub struct App {
     height: u32,
     daemon_available: bool,
     last_refresh: Instant,
+    refresh_interval: f64,
     status: Option<StatusInfo>,
     cpu_stats: Option<CpuStats>,
     memory_stats: Option<MemoryStats>,
@@ -60,16 +55,19 @@ pub struct App {
 
 impl App {
     /// Create a new GUI application.
-    pub fn new() -> Result<Self> {
+    pub fn new(config: GuiConfig) -> Result<Self> {
         let conn = Connection::connect(None)?;
 
         // Get primary monitor for centering
         let monitor = gartk_x11::primary_monitor(&conn)?;
 
-        let width = DEFAULT_WIDTH.min(monitor.rect.width);
-        let height = DEFAULT_HEIGHT.min(monitor.rect.height);
+        let width = config.width.min(monitor.rect.width);
+        let height = config.height.min(monitor.rect.height);
         let x = monitor.rect.x + (monitor.rect.width as i32 - width as i32) / 2;
         let y = monitor.rect.y + (monitor.rect.height as i32 - height as i32) / 2;
+
+        // Calculate refresh interval from FPS
+        let refresh_interval = 1.0 / config.refresh_rate.max(1) as f64;
 
         let window = Window::create(
             conn.clone(),
@@ -112,6 +110,7 @@ impl App {
             height,
             daemon_available,
             last_refresh: Instant::now() - std::time::Duration::from_secs(10),
+            refresh_interval,
             status: None,
             cpu_stats: None,
             memory_stats: None,
@@ -567,7 +566,7 @@ impl App {
                 }
 
                 InputEvent::Idle => {
-                    if self.last_refresh.elapsed().as_secs_f64() >= REFRESH_INTERVAL {
+                    if self.last_refresh.elapsed().as_secs_f64() >= self.refresh_interval {
                         if self.daemon_available {
                             self.refresh_data();
                             self.update_header();

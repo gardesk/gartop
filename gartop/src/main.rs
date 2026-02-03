@@ -60,7 +60,8 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Gui) => {
             tracing::info!("Starting gartop GUI");
-            gui::run().await
+            let cfg = config::Config::load(cli.config.as_deref())?;
+            gui::run(cfg.gui).await
         }
         None => {
             // Default: start daemon

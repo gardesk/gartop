@@ -2,6 +2,7 @@
 
 mod state;
 
+use crate::config::Config;
 use crate::ipc::{ClientHandler, Command, IpcServer, Response};
 use anyhow::Result;
 use gartop_ipc::{SortField, StatusInfo};
@@ -11,14 +12,21 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
 /// Run the gartop daemon.
-pub async fn run(_config_path: Option<String>, _foreground: bool) -> Result<()> {
-    let state = Arc::new(Mutex::new(DaemonState::new(300, 1000)?));
+pub async fn run(config_path: Option<String>, _foreground: bool) -> Result<()> {
+    let config = Config::load(config_path.as_deref())?;
+    let daemon_config = &config.daemon;
+
+    let state = Arc::new(Mutex::new(DaemonState::new(
+        daemon_config.history_size,
+        daemon_config.sample_interval_ms,
+    )?));
     let server = IpcServer::new().await?;
 
-    // CPU/Memory collection loop (every second)
+    // CPU/Memory collection loop
+    let sample_interval = std::time::Duration::from_millis(daemon_config.sample_interval_ms);
     let state_clone = state.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        let mut interval = tokio::time::interval(sample_interval);
         loop {
             interval.tick().await;
             let mut s = state_clone.lock().await;
@@ -31,14 +39,16 @@ pub async fn run(_config_path: Option<String>, _foreground: bool) -> Result<()> 
         }
     });
 
-    // Process collection loop (every 2 seconds)
+    // Process collection loop (2x sample interval)
+    let process_interval = std::time::Duration::from_millis(daemon_config.sample_interval_ms * 2);
+    let max_processes = daemon_config.max_processes;
     let state_clone = state.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        let mut interval = tokio::time::interval(process_interval);
         loop {
             interval.tick().await;
             let mut s = state_clone.lock().await;
-            if let Err(e) = s.collect_processes(SortField::Cpu, Some(100)) {
+            if let Err(e) = s.collect_processes(SortField::Cpu, Some(max_processes)) {
                 debug!("Process collect error: {}", e);
             }
         }
