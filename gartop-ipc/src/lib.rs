@@ -160,6 +160,8 @@ pub struct MemoryStats {
 pub struct ProcessInfo {
     /// Process ID.
     pub pid: i32,
+    /// Parent process ID.
+    pub ppid: i32,
     /// Process name.
     pub name: String,
     /// Command line.
