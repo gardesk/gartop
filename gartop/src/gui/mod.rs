@@ -8,9 +8,6 @@ mod tabs;
 pub mod theme;
 
 pub use app::App;
-pub use graph::{DataSeries, LineGraph};
-pub use process_list::ProcessList;
-pub use tabs::{Tab, TabBar, TAB_BAR_HEIGHT};
 
 use crate::config::GuiConfig;
 use anyhow::Result;
