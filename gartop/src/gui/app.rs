@@ -268,7 +268,18 @@ impl App {
         let uptime = self.status.as_ref().map(|s| s.uptime_secs).unwrap_or(0);
         let cpu = self.cpu_stats.as_ref().map(|s| s.usage_percent as f32).unwrap_or(0.0);
         let mem = self.memory_stats.as_ref().map(|s| s.usage_percent as f32).unwrap_or(0.0);
-        self.header.update(uptime, cpu, mem);
+
+        // Sum network rates across all interfaces
+        let net_rate: f64 = self.network_stats.iter()
+            .map(|s| s.rx_rate + s.tx_rate)
+            .sum();
+
+        // Sum disk rates across all devices
+        let disk_rate: f64 = self.disk_stats.iter()
+            .map(|s| s.read_rate + s.write_rate)
+            .sum();
+
+        self.header.update(uptime, cpu, mem, net_rate, disk_rate);
     }
 
     /// Render the entire UI.
