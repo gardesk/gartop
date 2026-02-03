@@ -32,8 +32,8 @@ impl HeaderBar {
 
     /// Render the header bar.
     pub fn render(&self, renderer: &Renderer, theme: &Theme) -> anyhow::Result<()> {
-        // Background
-        renderer.fill_rect(self.bounds, theme.header_bg)?;
+        // Background - use panel_bg for seamless transition to tab bar
+        renderer.fill_rect(self.bounds, theme.panel_bg)?;
 
         // Title
         let title_style = TextStyle {
@@ -42,8 +42,8 @@ impl HeaderBar {
             color: theme.text,
             ..Default::default()
         };
-        // Center text vertically (y is baseline, so add font_size + padding)
-        let text_y = self.bounds.y as f64 + (self.bounds.height as f64 + title_style.font_size) / 2.0;
+        // Position text in upper portion of header (leave room below for visual separation)
+        let text_y = self.bounds.y as f64 + (self.bounds.height as f64 * 0.5) + 4.0;
         renderer.text("gartop", 16.0, text_y, &title_style)?;
 
         // Stats summary on right side
@@ -74,7 +74,7 @@ impl HeaderBar {
         // Position from right side
         let right_margin = 16.0;
         let spacing = 20.0;
-        let y = self.bounds.y as f64 + (self.bounds.height as f64 + stats_style.font_size) / 2.0;
+        let y = self.bounds.y as f64 + (self.bounds.height as f64 * 0.5) + 4.0;
 
         let uptime_width = renderer.measure_text(&uptime_text, &stats_style)?.width as f64;
         let mem_width = renderer.measure_text(&mem_text, &mem_style)?.width as f64;
