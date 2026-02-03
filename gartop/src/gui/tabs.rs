@@ -154,11 +154,11 @@ impl TabBar {
                 ..Default::default()
             };
 
-            // Center text in tab
+            // Center text in tab (baseline positioned, so add ~1/3 font height to center)
             let text = tab.label();
             let text_size = renderer.measure_text(text, &style)?;
             let text_x = tab_rect.x as f64 + (tab_rect.width as f64 - text_size.width as f64) / 2.0;
-            let text_y = tab_rect.y as f64 + (tab_rect.height as f64 + style.font_size) / 2.0;
+            let text_y = tab_rect.y as f64 + (tab_rect.height as f64 / 2.0) + (style.font_size / 3.0);
             renderer.text(text, text_x, text_y, &style)?;
 
             // Active indicator line

@@ -43,7 +43,7 @@ impl HeaderBar {
             ..Default::default()
         };
         // Position text in upper portion of header (leave room below for visual separation)
-        let text_y = self.bounds.y as f64 + (self.bounds.height as f64 * 0.5) + 4.0;
+        let text_y = self.bounds.y as f64 + (self.bounds.height as f64 * 0.4) + 6.0;
         renderer.text("gartop", 16.0, text_y, &title_style)?;
 
         // Stats summary on right side
@@ -74,7 +74,7 @@ impl HeaderBar {
         // Position from right side
         let right_margin = 16.0;
         let spacing = 20.0;
-        let y = self.bounds.y as f64 + (self.bounds.height as f64 * 0.5) + 4.0;
+        let y = self.bounds.y as f64 + (self.bounds.height as f64 * 0.4) + 6.0;
 
         let uptime_width = renderer.measure_text(&uptime_text, &stats_style)?.width as f64;
         let mem_width = renderer.measure_text(&mem_text, &mem_style)?.width as f64;
