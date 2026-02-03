@@ -202,6 +202,8 @@ pub struct ProcessInfo {
     pub state: String,
     /// User owning the process.
     pub user: String,
+    /// Container ID (if running in a container, e.g., Docker/Podman).
+    pub container: Option<String>,
 }
 
 /// Network interface statistics.
