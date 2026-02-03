@@ -40,6 +40,9 @@ pub struct GuiConfig {
     pub font_family: String,
     /// Font size.
     pub font_size: f64,
+    /// Default pane to open (cpu, memory, network, disk).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_pane: Option<String>,
 }
 
 impl Default for Config {
@@ -70,6 +73,7 @@ impl Default for GuiConfig {
             show_legend: true,
             font_family: "sans-serif".to_string(),
             font_size: 12.0,
+            default_pane: None,
         }
     }
 }
