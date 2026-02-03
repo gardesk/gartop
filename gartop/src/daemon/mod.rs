@@ -141,6 +141,10 @@ async fn handle_client(
                     Ok(stats) => Response::ok_with_data(stats),
                     Err(e) => Response::err(e.to_string()),
                 }
+                Command::GetGpu => match s.collect_gpu() {
+                    Ok(stats) => Response::ok_with_data(stats),
+                    Err(e) => Response::err(e.to_string()),
+                }
                 Command::GetProcesses { sort_by, limit } => {
                     match s.collect_processes(sort_by.unwrap_or_default(), limit) {
                         Ok(procs) => Response::ok_with_data(procs),
