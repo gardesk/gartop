@@ -1,8 +1,8 @@
 //! Daemon state management
 
-use crate::collector::{CpuCollector, DiskCollector, History, MemoryCollector, NetworkCollector, ProcessCollector};
+use crate::collector::{CpuCollector, DiskCollector, History, MemoryCollector, NetworkCollector, ProcessCollector, TempCollector};
 use crate::error::Result;
-use gartop_ipc::{CpuStats, DiskStats, MemoryStats, NetworkStats, ProcessInfo, SortField};
+use gartop_ipc::{CpuStats, DiskStats, MemoryStats, NetworkStats, ProcessInfo, SortField, TempStats};
 use procfs::Current;
 use std::time::Instant;
 
@@ -13,11 +13,13 @@ pub struct DaemonState {
     pub network_collector: NetworkCollector,
     pub disk_collector: DiskCollector,
     pub process_collector: ProcessCollector,
+    pub temp_collector: TempCollector,
     pub cpu_history: History<CpuStats>,
     pub memory_history: History<MemoryStats>,
     pub network_history: History<Vec<NetworkStats>>,
     pub disk_history: History<Vec<DiskStats>>,
     pub processes: Vec<ProcessInfo>,
+    pub temp_stats: Option<TempStats>,
     pub started: Instant,
     pub sample_interval_ms: u64,
 }
@@ -31,11 +33,13 @@ impl DaemonState {
             network_collector: NetworkCollector::new(),
             disk_collector: DiskCollector::new(),
             process_collector: ProcessCollector::new()?,
+            temp_collector: TempCollector::new()?,
             cpu_history: History::new(history_size),
             memory_history: History::new(history_size),
             network_history: History::new(history_size),
             disk_history: History::new(history_size),
             processes: Vec::new(),
+            temp_stats: None,
             started: Instant::now(),
             sample_interval_ms,
         })
@@ -66,6 +70,13 @@ impl DaemonState {
     pub fn collect_disk(&mut self) -> Result<Vec<DiskStats>> {
         let stats = self.disk_collector.collect()?;
         self.disk_history.push(stats.clone());
+        Ok(stats)
+    }
+
+    /// Collect temperature stats (no history, just current values).
+    pub fn collect_temperature(&mut self) -> Result<TempStats> {
+        let stats = self.temp_collector.collect()?;
+        self.temp_stats = Some(stats.clone());
         Ok(stats)
     }
 

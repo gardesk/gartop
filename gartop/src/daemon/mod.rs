@@ -137,6 +137,10 @@ async fn handle_client(
                     };
                     Response::ok_with_data(data)
                 }
+                Command::GetTemperature => match s.collect_temperature() {
+                    Ok(stats) => Response::ok_with_data(stats),
+                    Err(e) => Response::err(e.to_string()),
+                }
                 Command::GetProcesses { sort_by, limit } => {
                     match s.collect_processes(sort_by.unwrap_or_default(), limit) {
                         Ok(procs) => Response::ok_with_data(procs),
