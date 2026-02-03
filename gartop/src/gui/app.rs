@@ -631,16 +631,14 @@ impl App {
         if let Some(tab) = self.tab_bar.on_click(pos) {
             if tab != self.tab_bar.active() {
                 self.tab_bar.set_active(tab);
-                // Re-sort processes for new tab
+                // Re-sort cached processes locally (no daemon call)
                 let sort_field = match tab {
                     Tab::Cpu => SortField::Cpu,
                     Tab::Memory => SortField::Memory,
                     Tab::Network => SortField::NetConnections,
                     Tab::Disk => SortField::DiskTotal,
                 };
-                self.process_list.set_sort(sort_field);
-                // Force refresh to get re-sorted processes
-                self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                self.sort_processes(sort_field);
                 return true;
             }
         }
@@ -651,6 +649,44 @@ impl App {
         }
 
         false
+    }
+
+    /// Sort cached processes by the given field and update process list.
+    fn sort_processes(&mut self, sort_field: SortField) {
+        match sort_field {
+            SortField::Cpu => self.processes.sort_by(|a, b| {
+                b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            SortField::Memory => self.processes.sort_by(|a, b| {
+                b.memory_percent.partial_cmp(&a.memory_percent).unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            SortField::DiskRead => self.processes.sort_by(|a, b| {
+                b.io_read_rate.partial_cmp(&a.io_read_rate).unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            SortField::DiskWrite => self.processes.sort_by(|a, b| {
+                b.io_write_rate.partial_cmp(&a.io_write_rate).unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            SortField::DiskTotal => self.processes.sort_by(|a, b| {
+                let a_total = a.io_read_rate + a.io_write_rate;
+                let b_total = b.io_read_rate + b.io_write_rate;
+                b_total.partial_cmp(&a_total).unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            SortField::NetConnections => self.processes.sort_by(|a, b| {
+                b.net_connections.cmp(&a.net_connections)
+            }),
+            SortField::NetTcp => self.processes.sort_by(|a, b| {
+                b.net_tcp.cmp(&a.net_tcp)
+            }),
+            SortField::NetBandwidth => self.processes.sort_by(|a, b| {
+                let a_total = a.net_rx_rate + a.net_tx_rate;
+                let b_total = b.net_rx_rate + b.net_tx_rate;
+                b_total.partial_cmp(&a_total).unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            SortField::Pid => self.processes.sort_by_key(|p| p.pid),
+            SortField::Name => self.processes.sort_by(|a, b| a.name.cmp(&b.name)),
+        }
+        self.process_list.set_processes(self.processes.clone());
+        self.process_list.set_sort(sort_field);
     }
 
     /// Handle scroll.
@@ -711,24 +747,22 @@ impl App {
                         }
                         Key::Char('1') => {
                             self.tab_bar.set_active(Tab::Cpu);
-                            self.process_list.set_sort(SortField::Cpu);
-                            self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                            self.sort_processes(SortField::Cpu);
                             ev_loop.request_redraw();
                         }
                         Key::Char('2') => {
                             self.tab_bar.set_active(Tab::Memory);
-                            self.process_list.set_sort(SortField::Memory);
-                            self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                            self.sort_processes(SortField::Memory);
                             ev_loop.request_redraw();
                         }
                         Key::Char('3') => {
                             self.tab_bar.set_active(Tab::Network);
-                            self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                            self.sort_processes(SortField::NetConnections);
                             ev_loop.request_redraw();
                         }
                         Key::Char('4') => {
                             self.tab_bar.set_active(Tab::Disk);
-                            self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                            self.sort_processes(SortField::DiskTotal);
                             ev_loop.request_redraw();
                         }
                         Key::Tab => {
@@ -745,8 +779,7 @@ impl App {
                                 Tab::Network => SortField::NetConnections,
                                 Tab::Disk => SortField::DiskTotal,
                             };
-                            self.process_list.set_sort(sort_field);
-                            self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                            self.sort_processes(sort_field);
                             ev_loop.request_redraw();
                         }
                         _ => {}

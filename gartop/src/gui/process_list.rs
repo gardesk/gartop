@@ -171,7 +171,7 @@ impl ProcessList {
                 SortField::Cpu => theme.cpu_color,
                 SortField::Memory => theme.memory_color,
                 SortField::DiskRead | SortField::DiskWrite | SortField::DiskTotal => theme.disk_color,
-                SortField::NetConnections => theme.network_color,
+                SortField::NetConnections | SortField::NetTcp | SortField::NetBandwidth => theme.network_color,
                 _ => theme.text_secondary,
             },
             ..header_style.clone()
@@ -181,20 +181,27 @@ impl ProcessList {
         let is_disk_sort = matches!(self.sort_field, SortField::DiskRead | SortField::DiskWrite | SortField::DiskTotal);
         let is_net_sort = matches!(self.sort_field, SortField::NetConnections | SortField::NetTcp | SortField::NetBandwidth);
 
+        // Extra column position for network mode
+        let col_extra = x + 350.0;
+
         if is_disk_sort {
             renderer.text("Read/s", col_cpu, header_y, &sort_style)?;
             renderer.text("Write/s", col_mem, header_y, &sort_style)?;
+            renderer.text("User", col_user, header_y, &header_style)?;
         } else if is_net_sort {
-            renderer.text("TCP", col_cpu, header_y, &sort_style)?;
-            renderer.text("UDP", col_mem, header_y, &sort_style)?;
+            renderer.text("Sock", col_cpu, header_y, &sort_style)?;
+            renderer.text("Listen", col_mem, header_y, &sort_style)?;
+            renderer.text("Estab", col_extra, header_y, &sort_style)?;
+            renderer.text("User", col_user, header_y, &header_style)?;
         } else if self.sort_field == SortField::Cpu {
             renderer.text("CPU%", col_cpu, header_y, &sort_style)?;
             renderer.text("Mem%", col_mem, header_y, &header_style)?;
+            renderer.text("User", col_user, header_y, &header_style)?;
         } else {
             renderer.text("CPU%", col_cpu, header_y, &header_style)?;
             renderer.text("Mem%", col_mem, header_y, &sort_style)?;
+            renderer.text("User", col_user, header_y, &header_style)?;
         }
-        renderer.text("User", col_user, header_y, &header_style)?;
 
         // Header separator
         let sep_y = (self.bounds.y + HEADER_HEIGHT as i32) as f64;
@@ -258,21 +265,29 @@ impl ProcessList {
                 };
                 renderer.text(&format_rate(process.io_write_rate), col_mem, text_y, &write_style)?;
             } else if is_net_sort {
-                // TCP count
-                let tcp_style = if process.net_tcp > 5 {
+                // Total sockets
+                let sock_style = if process.net_connections > 10 {
                     TextStyle { color: theme.network_color, ..text_style.clone() }
                 } else {
                     dim_style.clone()
                 };
-                renderer.text(&process.net_tcp.to_string(), col_cpu, text_y, &tcp_style)?;
+                renderer.text(&process.net_connections.to_string(), col_cpu, text_y, &sock_style)?;
 
-                // UDP count
-                let udp_style = if process.net_udp > 5 {
+                // Listen count (servers)
+                let listen_style = if process.net_listen > 0 {
                     TextStyle { color: theme.network_color, ..text_style.clone() }
                 } else {
                     dim_style.clone()
                 };
-                renderer.text(&process.net_udp.to_string(), col_mem, text_y, &udp_style)?;
+                renderer.text(&process.net_listen.to_string(), col_mem, text_y, &listen_style)?;
+
+                // Established count (active connections)
+                let estab_style = if process.net_established > 5 {
+                    TextStyle { color: theme.network_color, ..text_style.clone() }
+                } else {
+                    dim_style.clone()
+                };
+                renderer.text(&process.net_established.to_string(), col_extra, text_y, &estab_style)?;
             } else {
                 // CPU %
                 let cpu_style = if process.cpu_percent > 50.0 {
