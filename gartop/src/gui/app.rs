@@ -12,7 +12,7 @@ use anyhow::Result;
 use gartk_core::{InputEvent, Key, Point, Rect};
 use gartk_render::{Renderer, TextStyle};
 use gartk_x11::{Connection, EventLoop, EventLoopConfig, Window, WindowConfig};
-use gartop_ipc::{Command, CpuStats, DiskStats, MemoryStats, NetworkStats, ProcessInfo, Response, SortField, StatusInfo, TempStats};
+use gartop_ipc::{Command, CpuStats, DiskStats, GpuStats, MemoryStats, NetworkStats, ProcessInfo, Response, SortField, StatusInfo, TempStats};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -98,6 +98,7 @@ pub struct App {
     network_stats: Vec<NetworkStats>,
     disk_stats: Vec<DiskStats>,
     temp_stats: Option<TempStats>,
+    gpu_stats: Option<GpuStats>,
     cpu_history: Vec<CpuStats>,
     memory_history: Vec<MemoryStats>,
     network_history: Vec<Vec<NetworkStats>>,
@@ -195,6 +196,7 @@ impl App {
             network_stats: Vec::new(),
             disk_stats: Vec::new(),
             temp_stats: None,
+            gpu_stats: None,
             cpu_history: Vec::new(),
             memory_history: Vec::new(),
             network_history: Vec::new(),
@@ -321,6 +323,13 @@ impl App {
             }
         }
 
+        // Get GPU stats
+        if let Some(resp) = self.send_command(&Command::GetGpu) {
+            if resp.success {
+                self.gpu_stats = resp.data.and_then(|d| serde_json::from_value(d).ok());
+            }
+        }
+
         // Get processes sorted by current tab's resource (skip when frozen)
         if !self.frozen {
             let sort_field = match self.tab_bar.active() {
@@ -383,6 +392,15 @@ impl App {
                 .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         });
         self.header.update_temp(max_temp);
+
+        // Get primary GPU usage (first device with non-zero usage)
+        let gpu_usage = self.gpu_stats.as_ref().and_then(|gs| {
+            gs.devices.iter()
+                .map(|d| d.usage_percent)
+                .find(|&u| u > 0.0)
+                .or_else(|| gs.devices.first().map(|d| d.usage_percent))
+        });
+        self.header.update_gpu(gpu_usage);
     }
 
     /// Render the entire UI.
