@@ -244,6 +244,7 @@ impl ProcessCollector {
 
         Ok(ProcessInfo {
             pid,
+            ppid: stat.ppid,
             name,
             cmdline,
             cpu_percent,
