@@ -537,7 +537,7 @@ impl App {
             ("Home / End", "First / last"),
             ("PgUp/PgDn", "Jump 10 rows"),
             ("Enter", "Process detail"),
-            ("t", "Tree view toggle"),
+            ("T", "Tree view toggle"),
             ("", ""),
             ("Alt+f", "Freeze list"),
             ("/", "Search filter"),
@@ -1570,7 +1570,7 @@ impl App {
                             Key::Char('r') => {
                                 self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
                             }
-                            Key::Char('t') => {
+                            Key::Char('T') => {
                                 self.tree_view = !self.tree_view;
                                 ev_loop.request_redraw();
                             }
