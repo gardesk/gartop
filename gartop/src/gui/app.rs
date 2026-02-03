@@ -31,7 +31,7 @@ pub struct App {
     should_quit: bool,
     width: u32,
     height: u32,
-    daemon_conn: Option<UnixStream>,
+    daemon_available: bool,
     last_refresh: Instant,
     status: Option<StatusInfo>,
     cpu_stats: Option<CpuStats>,
@@ -74,8 +74,8 @@ impl App {
         // Create header bar
         let header = HeaderBar::new(Rect::new(0, 0, width, HEADER_HEIGHT));
 
-        // Try to connect to daemon
-        let daemon_conn = Self::connect_daemon();
+        // Check if daemon is available
+        let daemon_available = Self::check_daemon();
 
         Ok(Self {
             window,
@@ -86,7 +86,7 @@ impl App {
             should_quit: false,
             width,
             height,
-            daemon_conn,
+            daemon_available,
             last_refresh: Instant::now() - std::time::Duration::from_secs(10), // force immediate refresh
             status: None,
             cpu_stats: None,
@@ -94,25 +94,26 @@ impl App {
         })
     }
 
-    /// Connect to the daemon, returns None if connection fails.
-    fn connect_daemon() -> Option<UnixStream> {
+    /// Check if daemon is available by attempting a connection.
+    fn check_daemon() -> bool {
         let path = gartop_ipc::socket_path();
         match UnixStream::connect(&path) {
-            Ok(stream) => {
-                stream.set_nonblocking(false).ok()?;
-                tracing::info!("Connected to daemon at {}", path.display());
-                Some(stream)
+            Ok(_) => {
+                tracing::info!("Daemon available at {}", path.display());
+                true
             }
             Err(e) => {
-                tracing::warn!("Failed to connect to daemon: {}", e);
-                None
+                tracing::warn!("Daemon not available: {}", e);
+                false
             }
         }
     }
 
     /// Send a command to the daemon and get response.
-    fn send_command(&mut self, cmd: &Command) -> Option<Response> {
-        let stream = self.daemon_conn.as_mut()?;
+    /// Creates a fresh connection for each command since daemon closes after response.
+    fn send_command(&self, cmd: &Command) -> Option<Response> {
+        let path = gartop_ipc::socket_path();
+        let mut stream = UnixStream::connect(&path).ok()?;
 
         // Send command
         let json = serde_json::to_string(cmd).ok()?;
@@ -120,7 +121,7 @@ impl App {
         stream.flush().ok()?;
 
         // Read response
-        let mut reader = BufReader::new(stream.try_clone().ok()?);
+        let mut reader = BufReader::new(&stream);
         let mut line = String::new();
         reader.read_line(&mut line).ok()?;
 
@@ -129,8 +130,11 @@ impl App {
 
     /// Refresh data from daemon.
     fn refresh_data(&mut self) {
+        let mut any_success = false;
+
         // Get status
         if let Some(resp) = self.send_command(&Command::Status) {
+            any_success = true;
             if resp.success {
                 self.status = resp.data.and_then(|d| serde_json::from_value(d).ok());
             }
@@ -138,6 +142,7 @@ impl App {
 
         // Get CPU stats
         if let Some(resp) = self.send_command(&Command::GetCpu) {
+            any_success = true;
             if resp.success {
                 self.cpu_stats = resp.data.and_then(|d| serde_json::from_value(d).ok());
             }
@@ -145,11 +150,14 @@ impl App {
 
         // Get memory stats
         if let Some(resp) = self.send_command(&Command::GetMemory) {
+            any_success = true;
             if resp.success {
                 self.memory_stats = resp.data.and_then(|d| serde_json::from_value(d).ok());
             }
         }
 
+        // Update daemon availability based on whether any command succeeded
+        self.daemon_available = any_success;
         self.last_refresh = Instant::now();
     }
 
@@ -206,7 +214,7 @@ impl App {
         let x = 20.0;
         let line_height = 24.0;
 
-        if self.daemon_conn.is_none() {
+        if !self.daemon_available {
             self.renderer.text(
                 "Not connected to daemon",
                 x,
@@ -394,14 +402,14 @@ impl App {
                 InputEvent::Idle => {
                     // Periodic refresh
                     if self.last_refresh.elapsed().as_secs_f64() >= REFRESH_INTERVAL {
-                        if self.daemon_conn.is_some() {
+                        if self.daemon_available {
                             self.refresh_data();
                             self.update_header();
                             ev_loop.request_redraw();
                         } else {
                             // Try reconnecting
-                            self.daemon_conn = Self::connect_daemon();
-                            if self.daemon_conn.is_some() {
+                            self.daemon_available = Self::check_daemon();
+                            if self.daemon_available {
                                 ev_loop.request_redraw();
                             }
                             self.last_refresh = Instant::now();
