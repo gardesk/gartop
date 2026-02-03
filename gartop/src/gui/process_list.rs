@@ -3,6 +3,7 @@
 use gartk_core::{Point, Rect};
 use gartk_render::{Renderer, TextStyle};
 use gartop_ipc::{ProcessInfo, SortField};
+use std::time::Instant;
 use super::theme::Theme;
 
 /// Format rate (bytes/second) to human-readable compact string.
@@ -30,6 +31,9 @@ const ROW_HEIGHT: u32 = 22;
 /// Header row height.
 const HEADER_HEIGHT: u32 = 24;
 
+/// Grace period after user navigation before auto-scrolling resumes (ms)
+const NAVIGATION_GRACE_MS: u64 = 400;
+
 /// Process list component - renders process data without owning it.
 /// Tracks selection by PID so cursor follows the process when list reorders.
 pub struct ProcessList {
@@ -42,6 +46,10 @@ pub struct ProcessList {
     sort_field: SortField,
     visible_rows: usize,
     process_count: usize,
+    /// Last time user navigated (for grace period)
+    last_nav_time: Option<Instant>,
+    /// Whether cursor lost its target and needs visual indicator
+    cursor_lost: bool,
 }
 
 impl ProcessList {
@@ -56,6 +64,8 @@ impl ProcessList {
             sort_field: SortField::Cpu,
             visible_rows,
             process_count: 0,
+            last_nav_time: None,
+            cursor_lost: false,
         }
     }
 
@@ -67,40 +77,48 @@ impl ProcessList {
 
     /// Sync selection with updated process list.
     /// Call this after refreshing process data to update the cursor position.
-    /// Returns true if selection is still valid and visible.
+    /// Returns true if selection is still valid.
     pub fn sync_selection(&mut self, processes: &[ProcessInfo]) -> bool {
         self.process_count = processes.len();
+        self.cursor_lost = false;
 
         // Clamp scroll offset
         if self.scroll_offset > self.max_scroll() {
             self.scroll_offset = self.max_scroll();
         }
 
+        // Check if we're in grace period after user navigation
+        let in_grace_period = self.last_nav_time
+            .map(|t| t.elapsed().as_millis() < NAVIGATION_GRACE_MS as u128)
+            .unwrap_or(false);
+
         // Find the selected PID in the new list
         if let Some(pid) = self.selected_pid {
             if let Some(idx) = processes.iter().position(|p| p.pid == pid) {
+                // Process found - update index
                 self.selected_index = Some(idx);
 
-                // If process moved out of visible area, scroll to keep it visible
-                // but only if it's still in the first "page" of results
-                if idx < self.visible_rows * 2 {
-                    // Process is near the top, keep tracking
+                // Only auto-scroll if NOT in grace period
+                if !in_grace_period {
+                    // Keep cursor visible if it moved
                     if idx < self.scroll_offset {
                         self.scroll_offset = idx;
                     } else if idx >= self.scroll_offset + self.visible_rows {
                         self.scroll_offset = idx.saturating_sub(self.visible_rows - 1);
                     }
-                    return true;
+                }
+                return true;
+            } else {
+                // Process no longer exists - jump to last visible row
+                self.cursor_lost = true;
+                let last_visible = (self.scroll_offset + self.visible_rows - 1).min(processes.len().saturating_sub(1));
+                if !processes.is_empty() {
+                    self.selected_index = Some(last_visible);
+                    self.selected_pid = Some(processes[last_visible].pid);
                 } else {
-                    // Process moved too far down, clear selection
                     self.selected_pid = None;
                     self.selected_index = None;
-                    return false;
                 }
-            } else {
-                // Process no longer exists, clear selection
-                self.selected_pid = None;
-                self.selected_index = None;
                 return false;
             }
         }
@@ -159,6 +177,8 @@ impl ProcessList {
         let process_idx = self.scroll_offset + row;
 
         if process_idx < processes.len() {
+            self.last_nav_time = Some(Instant::now());
+            self.cursor_lost = false;
             let pid = processes[process_idx].pid;
             self.selected_pid = Some(pid);
             self.selected_index = Some(process_idx);
@@ -184,6 +204,9 @@ impl ProcessList {
         if processes.is_empty() {
             return;
         }
+        self.last_nav_time = Some(Instant::now());
+        self.cursor_lost = false;
+
         match self.selected_index {
             None => {
                 // Select first visible item
@@ -210,6 +233,9 @@ impl ProcessList {
         if processes.is_empty() {
             return;
         }
+        self.last_nav_time = Some(Instant::now());
+        self.cursor_lost = false;
+
         match self.selected_index {
             None => {
                 // Select first visible item
@@ -234,6 +260,8 @@ impl ProcessList {
     /// Select first item (Home key).
     pub fn select_first(&mut self, processes: &[ProcessInfo]) {
         if !processes.is_empty() {
+            self.last_nav_time = Some(Instant::now());
+            self.cursor_lost = false;
             self.selected_index = Some(0);
             self.selected_pid = Some(processes[0].pid);
             self.scroll_offset = 0;
@@ -243,6 +271,8 @@ impl ProcessList {
     /// Select last item (End key).
     pub fn select_last(&mut self, processes: &[ProcessInfo]) {
         if !processes.is_empty() {
+            self.last_nav_time = Some(Instant::now());
+            self.cursor_lost = false;
             let last_idx = processes.len() - 1;
             self.selected_index = Some(last_idx);
             self.selected_pid = Some(processes[last_idx].pid);
@@ -253,6 +283,11 @@ impl ProcessList {
     /// Get the currently selected index.
     pub fn selected_index(&self) -> Option<usize> {
         self.selected_index
+    }
+
+    /// Check if cursor just lost its target (for visual feedback).
+    pub fn is_cursor_lost(&self) -> bool {
+        self.cursor_lost
     }
 
     /// Render the process list.
@@ -358,7 +393,13 @@ impl ProcessList {
                     self.bounds.width - 4,
                     ROW_HEIGHT - 4,
                 );
-                renderer.fill_rounded_rect(row_rect, 2.0, theme.header_bg)?;
+                // Use magenta highlight when cursor lost its target
+                let highlight_color = if self.cursor_lost {
+                    gartk_core::Color::new(0.6, 0.2, 0.6, 1.0) // Magenta
+                } else {
+                    theme.header_bg
+                };
+                renderer.fill_rounded_rect(row_rect, 2.0, highlight_color)?;
             }
 
             // PID
