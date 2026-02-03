@@ -182,9 +182,9 @@ impl LineGraph {
 
             // Fill with transparent color
             ctx.set_source_rgba(
-                series.color.r as f64 / 255.0,
-                series.color.g as f64 / 255.0,
-                series.color.b as f64 / 255.0,
+                series.color.r,
+                series.color.g,
+                series.color.b,
                 self.fill_opacity,
             );
             let _ = ctx.fill();
@@ -198,9 +198,9 @@ impl LineGraph {
 
         // Stroke the line
         ctx.set_source_rgba(
-            series.color.r as f64 / 255.0,
-            series.color.g as f64 / 255.0,
-            series.color.b as f64 / 255.0,
+            series.color.r,
+            series.color.g,
+            series.color.b,
             1.0,
         );
         ctx.set_line_width(self.line_width);
@@ -224,9 +224,9 @@ impl LineGraph {
             // Color box
             ctx.rectangle(lx, y + 3.0, 8.0, 8.0);
             ctx.set_source_rgba(
-                data.color.r as f64 / 255.0,
-                data.color.g as f64 / 255.0,
-                data.color.b as f64 / 255.0,
+                data.color.r,
+                data.color.g,
+                data.color.b,
                 1.0,
             );
             let _ = ctx.fill();

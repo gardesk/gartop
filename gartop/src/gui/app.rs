@@ -1,18 +1,27 @@
 //! GUI application state and event loop
 
-use super::{graph::{DataSeries, LineGraph}, header::HeaderBar, theme::Theme};
+use super::{
+    graph::{DataSeries, LineGraph},
+    header::HeaderBar,
+    process_list::ProcessList,
+    tabs::{Tab, TabBar, TAB_BAR_HEIGHT},
+    theme::Theme,
+};
 use anyhow::Result;
-use gartk_core::{InputEvent, Key, Rect};
-use gartk_render::Renderer;
+use gartk_core::{InputEvent, Key, Point, Rect};
+use gartk_render::{Renderer, TextStyle};
 use gartk_x11::{Connection, EventLoop, EventLoopConfig, Window, WindowConfig};
-use gartop_ipc::{Command, CpuStats, MemoryStats, Response, StatusInfo};
+use gartop_ipc::{Command, CpuStats, MemoryStats, ProcessInfo, Response, SortField, StatusInfo};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Instant;
 use x11rb::protocol::xproto::{ConnectionExt, ImageFormat};
 
 /// Header bar height.
-const HEADER_HEIGHT: u32 = 36;
+const HEADER_HEIGHT: u32 = 40;
+
+/// Graph height.
+const GRAPH_HEIGHT: u32 = 150;
 
 /// Default window dimensions.
 const DEFAULT_WIDTH: u32 = 800;
@@ -28,6 +37,8 @@ pub struct App {
     gc: u32,
     theme: Theme,
     header: HeaderBar,
+    tab_bar: TabBar,
+    process_list: ProcessList,
     should_quit: bool,
     width: u32,
     height: u32,
@@ -38,6 +49,7 @@ pub struct App {
     memory_stats: Option<MemoryStats>,
     cpu_history: Vec<CpuStats>,
     memory_history: Vec<MemoryStats>,
+    processes: Vec<ProcessInfo>,
 }
 
 impl App {
@@ -73,8 +85,10 @@ impl App {
         let theme = Theme::default();
         let renderer = Renderer::new(width, height)?;
 
-        // Create header bar
+        // Create components
         let header = HeaderBar::new(Rect::new(0, 0, width, HEADER_HEIGHT));
+        let tab_bar = TabBar::new(Rect::new(0, HEADER_HEIGHT as i32, width, TAB_BAR_HEIGHT));
+        let process_list = Self::create_process_list(width, height);
 
         // Check if daemon is available
         let daemon_available = Self::check_daemon();
@@ -85,17 +99,27 @@ impl App {
             gc,
             theme,
             header,
+            tab_bar,
+            process_list,
             should_quit: false,
             width,
             height,
             daemon_available,
-            last_refresh: Instant::now() - std::time::Duration::from_secs(10), // force immediate refresh
+            last_refresh: Instant::now() - std::time::Duration::from_secs(10),
             status: None,
             cpu_stats: None,
             memory_stats: None,
             cpu_history: Vec::new(),
             memory_history: Vec::new(),
+            processes: Vec::new(),
         })
+    }
+
+    /// Create process list with correct bounds.
+    fn create_process_list(width: u32, height: u32) -> ProcessList {
+        let content_start = HEADER_HEIGHT + TAB_BAR_HEIGHT + GRAPH_HEIGHT + 24; // 24 for graph label
+        let list_height = height.saturating_sub(content_start);
+        ProcessList::new(Rect::new(0, content_start as i32, width, list_height))
     }
 
     /// Check if daemon is available by attempting a connection.
@@ -114,17 +138,14 @@ impl App {
     }
 
     /// Send a command to the daemon and get response.
-    /// Creates a fresh connection for each command since daemon closes after response.
     fn send_command(&self, cmd: &Command) -> Option<Response> {
         let path = gartop_ipc::socket_path();
         let mut stream = UnixStream::connect(&path).ok()?;
 
-        // Send command
         let json = serde_json::to_string(cmd).ok()?;
         writeln!(stream, "{}", json).ok()?;
         stream.flush().ok()?;
 
-        // Read response
         let mut reader = BufReader::new(&stream);
         let mut line = String::new();
         reader.read_line(&mut line).ok()?;
@@ -174,7 +195,22 @@ impl App {
             }
         }
 
-        // Update daemon availability based on whether any command succeeded
+        // Get processes sorted by current tab's resource
+        let sort_field = match self.tab_bar.active() {
+            Tab::Cpu => SortField::Cpu,
+            Tab::Memory => SortField::Memory,
+        };
+        if let Some(resp) = self.send_command(&Command::GetProcesses {
+            sort_by: Some(sort_field),
+            limit: Some(100),
+        }) {
+            if resp.success {
+                self.processes = resp.data.and_then(|d| serde_json::from_value(d).ok()).unwrap_or_default();
+                self.process_list.set_processes(self.processes.clone());
+                self.process_list.set_sort(sort_field);
+            }
+        }
+
         self.daemon_available = any_success;
         self.last_refresh = Instant::now();
     }
@@ -198,157 +234,164 @@ impl App {
         // Render header
         self.header.render(&self.renderer, &self.theme)?;
 
-        // Render main content area
-        let content_y = HEADER_HEIGHT as i32;
-        let content_height = self.height.saturating_sub(HEADER_HEIGHT);
-        let content_rect = Rect::new(0, content_y, self.width, content_height);
+        // Render tab bar
+        self.tab_bar.render(&self.renderer, &self.theme)?;
 
-        self.renderer.fill_rect(content_rect, self.theme.panel_bg)?;
+        // Render content area
+        let content_y = (HEADER_HEIGHT + TAB_BAR_HEIGHT) as i32;
+        let content_height = self.height.saturating_sub(HEADER_HEIGHT + TAB_BAR_HEIGHT);
 
-        // Show connection status or stats
-        self.render_content(content_rect)?;
+        if !self.daemon_available {
+            self.render_not_connected(content_y)?;
+        } else {
+            self.render_tab_content(content_y, content_height)?;
+        }
 
         self.renderer.flush();
         Ok(())
     }
 
-    /// Render main content area.
-    fn render_content(&self, bounds: Rect) -> Result<()> {
-        use gartk_render::TextStyle;
-
+    /// Render "not connected" message.
+    fn render_not_connected(&self, content_y: i32) -> Result<()> {
         let style = TextStyle {
             font_family: "monospace".to_string(),
-            font_size: 12.0,
-            color: self.theme.text,
+            font_size: 13.0,
+            color: self.theme.swap_color,
             ..Default::default()
         };
-
         let dim_style = TextStyle {
             color: self.theme.text_secondary,
             ..style.clone()
         };
 
-        let padding = 12;
-        let graph_height = 120u32;
-        let text_line_height = 18.0;
+        self.renderer.text("Not connected to daemon", 20.0, content_y as f64 + 40.0, &style)?;
+        self.renderer.text("Run: gartop daemon", 20.0, content_y as f64 + 65.0, &dim_style)?;
+        Ok(())
+    }
 
-        if !self.daemon_available {
-            self.renderer.text(
-                "Not connected to daemon",
-                padding as f64,
-                bounds.y as f64 + 30.0,
-                &TextStyle {
-                    color: self.theme.swap_color,
-                    ..style.clone()
-                },
-            )?;
-            self.renderer.text(
-                "Run: gartop daemon",
-                padding as f64,
-                bounds.y as f64 + 50.0,
-                &dim_style,
-            )?;
-            return Ok(());
-        }
+    /// Render the content for the active tab.
+    fn render_tab_content(&self, content_y: i32, _content_height: u32) -> Result<()> {
+        let padding = 12;
+        let graph_width = self.width - (padding * 2) as u32;
 
         // Get Cairo context for graph rendering
         let ctx = self.renderer.context()?;
-        let graph = LineGraph::default();
-
-        let mut y = bounds.y + padding as i32;
-        let graph_width = bounds.width - (padding * 2) as u32;
-
-        // CPU Section
-        let cpu_label = if let Some(cpu) = &self.cpu_stats {
-            format!("CPU: {:.1}%", cpu.usage_percent)
-        } else {
-            "CPU: --".to_string()
+        let graph = LineGraph {
+            fill_opacity: 0.25,
+            ..LineGraph::default()
         };
-        self.renderer.text(
-            &cpu_label,
-            padding as f64,
-            y as f64 + 14.0,
-            &TextStyle { color: self.theme.cpu_color, ..style.clone() },
-        )?;
-        y += 20;
 
-        // CPU Graph
-        let cpu_rect = Rect::new(padding as i32, y, graph_width, graph_height);
-        let mut cpu_series = DataSeries::new("CPU", self.theme.cpu_color);
-        cpu_series.set_values(self.cpu_history.iter().map(|s| s.usage_percent).collect());
-        graph.render(&ctx, cpu_rect, &[cpu_series], &self.theme);
-        y += graph_height as i32 + padding as i32;
+        let mut y = content_y + padding as i32;
 
-        // Memory Section
-        let mem_label = if let Some(mem) = &self.memory_stats {
-            format!(
-                "Memory: {:.1}% ({} / {})",
-                mem.usage_percent,
-                format_bytes(mem.used),
-                format_bytes(mem.total)
-            )
-        } else {
-            "Memory: --".to_string()
-        };
-        self.renderer.text(
-            &mem_label,
-            padding as f64,
-            y as f64 + 14.0,
-            &TextStyle { color: self.theme.memory_color, ..style.clone() },
-        )?;
-        y += 20;
+        match self.tab_bar.active() {
+            Tab::Cpu => {
+                // CPU label
+                let cpu_label = if let Some(cpu) = &self.cpu_stats {
+                    format!("CPU: {:.1}%", cpu.usage_percent)
+                } else {
+                    "CPU: --".to_string()
+                };
+                self.renderer.text(
+                    &cpu_label,
+                    padding as f64,
+                    y as f64 + 14.0,
+                    &TextStyle {
+                        font_family: "monospace".to_string(),
+                        font_size: 12.0,
+                        color: self.theme.cpu_color,
+                        ..Default::default()
+                    },
+                )?;
 
-        // Memory Graph
-        let mem_rect = Rect::new(padding as i32, y, graph_width, graph_height);
-        let mut mem_series = DataSeries::new("Memory", self.theme.memory_color);
-        let mut swap_series = DataSeries::new("Swap", self.theme.swap_color);
-        mem_series.set_values(self.memory_history.iter().map(|s| s.usage_percent).collect());
-        swap_series.set_values(self.memory_history.iter().map(|s| {
-            if s.swap_total > 0 {
-                (s.swap_used as f64 / s.swap_total as f64) * 100.0
-            } else {
-                0.0
-            }
-        }).collect());
-        graph.render(&ctx, mem_rect, &[mem_series, swap_series], &self.theme);
-        y += graph_height as i32 + padding as i32;
-
-        // Additional stats text
-        if let Some(cpu) = &self.cpu_stats {
-            let cores_to_show = cpu.per_core.len().min(8);
-            let mut core_line = String::from("Cores: ");
-            for (i, usage) in cpu.per_core.iter().take(cores_to_show).enumerate() {
-                if i > 0 {
-                    core_line.push_str(" | ");
+                // Per-core info on right
+                if let Some(cpu) = &self.cpu_stats {
+                    let cores = cpu.per_core.len();
+                    let core_info = format!("{} cores", cores);
+                    self.renderer.text(
+                        &core_info,
+                        (self.width - 80) as f64,
+                        y as f64 + 14.0,
+                        &TextStyle {
+                            font_family: "monospace".to_string(),
+                            font_size: 10.0,
+                            color: self.theme.text_secondary,
+                            ..Default::default()
+                        },
+                    )?;
                 }
-                core_line.push_str(&format!("{}:{:.0}%", i, usage));
+                y += 20;
+
+                // CPU Graph
+                let graph_rect = Rect::new(padding as i32, y, graph_width, GRAPH_HEIGHT);
+                let mut cpu_series = DataSeries::new("CPU", self.theme.cpu_color);
+                cpu_series.set_values(self.cpu_history.iter().map(|s| s.usage_percent).collect());
+                graph.render(&ctx, graph_rect, &[cpu_series], &self.theme);
             }
-            if cpu.per_core.len() > cores_to_show {
-                core_line.push_str(&format!(" (+{} more)", cpu.per_core.len() - cores_to_show));
+
+            Tab::Memory => {
+                // Memory label
+                let mem_label = if let Some(mem) = &self.memory_stats {
+                    format!(
+                        "Memory: {:.1}% ({} / {})",
+                        mem.usage_percent,
+                        format_bytes(mem.used),
+                        format_bytes(mem.total)
+                    )
+                } else {
+                    "Memory: --".to_string()
+                };
+                self.renderer.text(
+                    &mem_label,
+                    padding as f64,
+                    y as f64 + 14.0,
+                    &TextStyle {
+                        font_family: "monospace".to_string(),
+                        font_size: 12.0,
+                        color: self.theme.memory_color,
+                        ..Default::default()
+                    },
+                )?;
+
+                // Swap info on right
+                if let Some(mem) = &self.memory_stats {
+                    let swap_pct = if mem.swap_total > 0 {
+                        (mem.swap_used as f64 / mem.swap_total as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+                    let swap_info = format!("Swap: {:.1}%", swap_pct);
+                    self.renderer.text(
+                        &swap_info,
+                        (self.width - 80) as f64,
+                        y as f64 + 14.0,
+                        &TextStyle {
+                            font_family: "monospace".to_string(),
+                            font_size: 10.0,
+                            color: self.theme.swap_color,
+                            ..Default::default()
+                        },
+                    )?;
+                }
+                y += 20;
+
+                // Memory Graph
+                let graph_rect = Rect::new(padding as i32, y, graph_width, GRAPH_HEIGHT);
+                let mut mem_series = DataSeries::new("Memory", self.theme.memory_color);
+                let mut swap_series = DataSeries::new("Swap", self.theme.swap_color);
+                mem_series.set_values(self.memory_history.iter().map(|s| s.usage_percent).collect());
+                swap_series.set_values(self.memory_history.iter().map(|s| {
+                    if s.swap_total > 0 {
+                        (s.swap_used as f64 / s.swap_total as f64) * 100.0
+                    } else {
+                        0.0
+                    }
+                }).collect());
+                graph.render(&ctx, graph_rect, &[mem_series, swap_series], &self.theme);
             }
-            self.renderer.text(&core_line, padding as f64, y as f64 + text_line_height, &dim_style)?;
-            y += text_line_height as i32 + 4;
         }
 
-        if let Some(mem) = &self.memory_stats {
-            let swap_percent = if mem.swap_total > 0 {
-                (mem.swap_used as f64 / mem.swap_total as f64) * 100.0
-            } else {
-                0.0
-            };
-            self.renderer.text(
-                &format!(
-                    "Swap: {:.1}% ({} / {}) | Available: {}",
-                    swap_percent,
-                    format_bytes(mem.swap_used),
-                    format_bytes(mem.swap_total),
-                    format_bytes(mem.available)
-                ),
-                padding as f64,
-                y as f64 + text_line_height,
-                &dim_style,
-            )?;
-        }
+        // Render process list
+        self.process_list.render(&self.renderer, &self.theme)?;
 
         Ok(())
     }
@@ -390,9 +433,46 @@ impl App {
         self.width = width;
         self.height = height;
         self.renderer.resize(width, height)?;
+
+        // Update component bounds
         self.header = HeaderBar::new(Rect::new(0, 0, width, HEADER_HEIGHT));
+        self.tab_bar.set_bounds(Rect::new(0, HEADER_HEIGHT as i32, width, TAB_BAR_HEIGHT));
+        self.process_list = Self::create_process_list(width, height);
+        self.process_list.set_processes(self.processes.clone());
 
         Ok(())
+    }
+
+    /// Handle mouse click.
+    fn handle_click(&mut self, pos: Point) -> bool {
+        // Check tab bar
+        if let Some(tab) = self.tab_bar.on_click(pos) {
+            if tab != self.tab_bar.active() {
+                self.tab_bar.set_active(tab);
+                // Re-sort processes for new tab
+                let sort_field = match tab {
+                    Tab::Cpu => SortField::Cpu,
+                    Tab::Memory => SortField::Memory,
+                };
+                self.process_list.set_sort(sort_field);
+                // Force refresh to get re-sorted processes
+                self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                return true;
+            }
+        }
+
+        // Check process list
+        if self.process_list.on_click(pos).is_some() {
+            return true;
+        }
+
+        false
+    }
+
+    /// Handle scroll.
+    fn handle_scroll(&mut self, delta: i32) -> bool {
+        self.process_list.on_scroll(delta);
+        true
     }
 
     /// Run the GUI event loop.
@@ -416,14 +496,60 @@ impl App {
                     ev_loop.request_redraw();
                 }
 
+                InputEvent::MousePress(mouse_event) => {
+                    let pos = Point::new(mouse_event.position.x, mouse_event.position.y);
+                    if self.handle_click(pos) {
+                        ev_loop.request_redraw();
+                    }
+                }
+
+                InputEvent::MouseMove(mouse_event) => {
+                    let pos = Point::new(mouse_event.position.x, mouse_event.position.y);
+                    if self.tab_bar.on_mouse_move(pos) {
+                        ev_loop.request_redraw();
+                    }
+                }
+
+                InputEvent::Scroll(scroll_event) => {
+                    let delta = if scroll_event.delta_y > 0 { -1 } else { 1 };
+                    if self.handle_scroll(delta) {
+                        ev_loop.request_redraw();
+                    }
+                }
+
                 InputEvent::Key(key_event) if key_event.pressed => {
                     match key_event.key {
                         Key::Escape | Key::Char('q') => {
                             self.should_quit = true;
                         }
                         Key::Char('r') => {
-                            // Force refresh
                             self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                        }
+                        Key::Char('1') => {
+                            self.tab_bar.set_active(Tab::Cpu);
+                            self.process_list.set_sort(SortField::Cpu);
+                            self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                            ev_loop.request_redraw();
+                        }
+                        Key::Char('2') => {
+                            self.tab_bar.set_active(Tab::Memory);
+                            self.process_list.set_sort(SortField::Memory);
+                            self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                            ev_loop.request_redraw();
+                        }
+                        Key::Tab => {
+                            let new_tab = match self.tab_bar.active() {
+                                Tab::Cpu => Tab::Memory,
+                                Tab::Memory => Tab::Cpu,
+                            };
+                            self.tab_bar.set_active(new_tab);
+                            let sort_field = match new_tab {
+                                Tab::Cpu => SortField::Cpu,
+                                Tab::Memory => SortField::Memory,
+                            };
+                            self.process_list.set_sort(sort_field);
+                            self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                            ev_loop.request_redraw();
                         }
                         _ => {}
                     }
@@ -434,14 +560,12 @@ impl App {
                 }
 
                 InputEvent::Idle => {
-                    // Periodic refresh
                     if self.last_refresh.elapsed().as_secs_f64() >= REFRESH_INTERVAL {
                         if self.daemon_available {
                             self.refresh_data();
                             self.update_header();
                             ev_loop.request_redraw();
                         } else {
-                            // Try reconnecting
                             self.daemon_available = Self::check_daemon();
                             if self.daemon_available {
                                 ev_loop.request_redraw();
@@ -454,7 +578,6 @@ impl App {
                 _ => {}
             }
 
-            // Render if needed
             if ev_loop.needs_redraw() {
                 if let Err(e) = self.render() {
                     tracing::error!("Render error: {}", e);

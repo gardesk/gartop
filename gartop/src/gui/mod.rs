@@ -3,10 +3,14 @@
 mod app;
 mod graph;
 mod header;
+mod process_list;
+mod tabs;
 pub mod theme;
 
 pub use app::App;
 pub use graph::{DataSeries, LineGraph};
+pub use process_list::ProcessList;
+pub use tabs::{Tab, TabBar, TAB_BAR_HEIGHT};
 
 use anyhow::Result;
 
