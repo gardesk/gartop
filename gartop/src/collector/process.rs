@@ -1,5 +1,6 @@
 //! Process information collection from /proc/[pid]/
 
+use crate::collector::SocketCollector;
 use crate::error::{Error, Result};
 use gartop_ipc::{ProcessInfo, SortField};
 use procfs::process::{all_processes, FDTarget, Process};
@@ -27,6 +28,8 @@ pub struct ProcessCollector {
     prev_stats: HashMap<i32, PrevProcessStats>,
     /// Total memory for percentage calculation.
     total_memory: u64,
+    /// Socket collector for network stats.
+    socket_collector: SocketCollector,
 }
 
 impl ProcessCollector {
@@ -37,6 +40,7 @@ impl ProcessCollector {
         Ok(Self {
             prev_stats: HashMap::new(),
             total_memory: meminfo.mem_total,
+            socket_collector: SocketCollector::new(),
         })
     }
 
@@ -47,6 +51,10 @@ impl ProcessCollector {
         limit: Option<usize>,
     ) -> Result<Vec<ProcessInfo>> {
         let now = Instant::now();
+
+        // Refresh socket cache for network stats
+        self.socket_collector.refresh();
+
         let kernel_stats = procfs::KernelStats::current()?;
         let total = &kernel_stats.total;
         let system_total = total.user
@@ -110,6 +118,14 @@ impl ProcessCollector {
             }),
             SortField::NetConnections => processes.sort_by(|a, b| {
                 b.net_connections.cmp(&a.net_connections)
+            }),
+            SortField::NetTcp => processes.sort_by(|a, b| {
+                b.net_tcp.cmp(&a.net_tcp)
+            }),
+            SortField::NetBandwidth => processes.sort_by(|a, b| {
+                let a_total = a.net_rx_rate + a.net_tx_rate;
+                let b_total = b.net_rx_rate + b.net_tx_rate;
+                b_total.partial_cmp(&a_total).unwrap_or(std::cmp::Ordering::Equal)
             }),
             SortField::Pid => processes.sort_by_key(|p| p.pid),
             SortField::Name => processes.sort_by(|a, b| a.name.cmp(&b.name)),
@@ -206,15 +222,25 @@ impl ProcessCollector {
             .map(|u| u.name().to_string_lossy().to_string())
             .unwrap_or_else(|| status.ruid.to_string());
 
-        // Count network connections (sockets)
-        let net_connections = proc
-            .fd()
-            .map(|fds| {
-                fds.filter_map(|fd| fd.ok())
-                    .filter(|fd| matches!(fd.target, FDTarget::Socket(_)))
-                    .count() as u32
-            })
-            .unwrap_or(0);
+        // Count network connections (sockets) and collect socket inodes
+        let mut net_connections = 0u32;
+        let mut socket_inodes = Vec::new();
+        if let Ok(fds) = proc.fd() {
+            for fd in fds.filter_map(|fd| fd.ok()) {
+                if let FDTarget::Socket(inode) = fd.target {
+                    net_connections += 1;
+                    socket_inodes.push(inode);
+                }
+            }
+        }
+
+        // Get detailed network stats from socket collector
+        let net_stats = self.socket_collector.get_process_stats(&socket_inodes);
+        let (net_rx_rate, net_tx_rate) = self.socket_collector.get_process_bandwidth(&socket_inodes);
+        let net_tcp = net_stats.tcp_count;
+        let net_udp = net_stats.udp_count;
+        let net_listen = net_stats.listen_count;
+        let net_established = net_stats.established_count;
 
         Ok(ProcessInfo {
             pid,
@@ -229,6 +255,12 @@ impl ProcessCollector {
             io_read_rate,
             io_write_rate,
             net_connections,
+            net_tcp,
+            net_udp,
+            net_listen,
+            net_established,
+            net_rx_rate,
+            net_tx_rate,
             state,
             user,
         })

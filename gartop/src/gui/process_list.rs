@@ -179,14 +179,14 @@ impl ProcessList {
 
         // Show different columns based on sort field
         let is_disk_sort = matches!(self.sort_field, SortField::DiskRead | SortField::DiskWrite | SortField::DiskTotal);
-        let is_net_sort = matches!(self.sort_field, SortField::NetConnections);
+        let is_net_sort = matches!(self.sort_field, SortField::NetConnections | SortField::NetTcp | SortField::NetBandwidth);
 
         if is_disk_sort {
             renderer.text("Read/s", col_cpu, header_y, &sort_style)?;
             renderer.text("Write/s", col_mem, header_y, &sort_style)?;
         } else if is_net_sort {
-            renderer.text("Sockets", col_cpu, header_y, &sort_style)?;
-            renderer.text("Mem%", col_mem, header_y, &header_style)?;
+            renderer.text("TCP", col_cpu, header_y, &sort_style)?;
+            renderer.text("UDP", col_mem, header_y, &sort_style)?;
         } else if self.sort_field == SortField::Cpu {
             renderer.text("CPU%", col_cpu, header_y, &sort_style)?;
             renderer.text("Mem%", col_mem, header_y, &header_style)?;
@@ -258,21 +258,21 @@ impl ProcessList {
                 };
                 renderer.text(&format_rate(process.io_write_rate), col_mem, text_y, &write_style)?;
             } else if is_net_sort {
-                // Socket count
-                let net_style = if process.net_connections > 10 {
+                // TCP count
+                let tcp_style = if process.net_tcp > 5 {
                     TextStyle { color: theme.network_color, ..text_style.clone() }
                 } else {
                     dim_style.clone()
                 };
-                renderer.text(&process.net_connections.to_string(), col_cpu, text_y, &net_style)?;
+                renderer.text(&process.net_tcp.to_string(), col_cpu, text_y, &tcp_style)?;
 
-                // Memory %
-                let mem_style = if process.memory_percent > 10.0 {
-                    TextStyle { color: theme.memory_color, ..text_style.clone() }
+                // UDP count
+                let udp_style = if process.net_udp > 5 {
+                    TextStyle { color: theme.network_color, ..text_style.clone() }
                 } else {
                     dim_style.clone()
                 };
-                renderer.text(&format!("{:.1}", process.memory_percent), col_mem, text_y, &mem_style)?;
+                renderer.text(&process.net_udp.to_string(), col_mem, text_y, &udp_style)?;
             } else {
                 // CPU %
                 let cpu_style = if process.cpu_percent > 50.0 {

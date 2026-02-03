@@ -30,3 +30,6 @@ anyhow.workspace = true
 dirs.workspace = true
 nix.workspace = true
 users.workspace = true
+netlink-packet-sock-diag.workspace = true
+netlink-packet-core.workspace = true
+netlink-sys.workspace = true

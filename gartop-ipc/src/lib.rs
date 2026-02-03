@@ -74,6 +74,8 @@ pub enum SortField {
     DiskWrite,
     DiskTotal,
     NetConnections,
+    NetTcp,
+    NetBandwidth,
     Pid,
     Name,
 }
@@ -176,8 +178,20 @@ pub struct ProcessInfo {
     pub io_read_rate: f64,
     /// Disk write rate in bytes/sec.
     pub io_write_rate: f64,
-    /// Number of open network connections (TCP + UDP).
+    /// Number of open network sockets (total).
     pub net_connections: u32,
+    /// Number of TCP connections.
+    pub net_tcp: u32,
+    /// Number of UDP sockets.
+    pub net_udp: u32,
+    /// Number of listening sockets.
+    pub net_listen: u32,
+    /// Number of established TCP connections.
+    pub net_established: u32,
+    /// Network receive rate in bytes/sec.
+    pub net_rx_rate: f64,
+    /// Network transmit rate in bytes/sec.
+    pub net_tx_rate: f64,
     /// Process state.
     pub state: String,
     /// User owning the process.

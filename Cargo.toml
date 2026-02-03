@@ -47,3 +47,8 @@ anyhow = "1"
 dirs = "5"
 nix = { version = "0.29", features = ["signal"] }
 users = "0.11"
+
+# Netlink for socket diagnostics
+netlink-packet-sock-diag = "0.4"
+netlink-packet-core = "0.7"
+netlink-sys = "0.8"
