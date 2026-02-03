@@ -30,14 +30,14 @@ const ROW_HEIGHT: u32 = 22;
 /// Header row height.
 const HEADER_HEIGHT: u32 = 24;
 
-/// Process list component.
+/// Process list component - renders process data without owning it.
 pub struct ProcessList {
     bounds: Rect,
-    processes: Vec<ProcessInfo>,
     scroll_offset: usize,
     selected: Option<usize>,
     sort_field: SortField,
     visible_rows: usize,
+    process_count: usize,
 }
 
 impl ProcessList {
@@ -46,11 +46,11 @@ impl ProcessList {
         let visible_rows = ((bounds.height.saturating_sub(HEADER_HEIGHT)) / ROW_HEIGHT) as usize;
         Self {
             bounds,
-            processes: Vec::new(),
             scroll_offset: 0,
             selected: None,
             sort_field: SortField::Cpu,
             visible_rows,
+            process_count: 0,
         }
     }
 
@@ -60,9 +60,9 @@ impl ProcessList {
         self.visible_rows = ((bounds.height.saturating_sub(HEADER_HEIGHT)) / ROW_HEIGHT) as usize;
     }
 
-    /// Set processes to display.
-    pub fn set_processes(&mut self, processes: Vec<ProcessInfo>) {
-        self.processes = processes;
+    /// Update process count (for scroll calculations).
+    pub fn set_process_count(&mut self, count: usize) {
+        self.process_count = count;
         // Clamp scroll offset
         if self.scroll_offset > self.max_scroll() {
             self.scroll_offset = self.max_scroll();
@@ -81,7 +81,7 @@ impl ProcessList {
 
     /// Maximum scroll offset.
     fn max_scroll(&self) -> usize {
-        self.processes.len().saturating_sub(self.visible_rows)
+        self.process_count.saturating_sub(self.visible_rows)
     }
 
     /// Handle scroll (delta is number of rows to scroll, positive = down).
@@ -94,7 +94,7 @@ impl ProcessList {
     }
 
     /// Handle click, returns selected process PID if any.
-    pub fn on_click(&mut self, pos: Point) -> Option<i32> {
+    pub fn on_click(&mut self, pos: Point, processes: &[ProcessInfo]) -> Option<i32> {
         if !self.bounds.contains_point(pos) {
             return None;
         }
@@ -110,17 +110,17 @@ impl ProcessList {
         let row = ((local_y - HEADER_HEIGHT as i32) / ROW_HEIGHT as i32) as usize;
         let process_idx = self.scroll_offset + row;
 
-        if process_idx < self.processes.len() {
+        if process_idx < processes.len() {
             self.selected = Some(process_idx);
-            return Some(self.processes[process_idx].pid);
+            return Some(processes[process_idx].pid);
         }
 
         None
     }
 
     /// Get selected process PID.
-    pub fn selected_pid(&self) -> Option<i32> {
-        self.selected.and_then(|idx| self.processes.get(idx).map(|p| p.pid))
+    pub fn selected_pid(&self, processes: &[ProcessInfo]) -> Option<i32> {
+        self.selected.and_then(|idx| processes.get(idx).map(|p| p.pid))
     }
 
     /// Clear selection.
@@ -129,7 +129,7 @@ impl ProcessList {
     }
 
     /// Render the process list.
-    pub fn render(&self, renderer: &Renderer, theme: &Theme) -> anyhow::Result<()> {
+    pub fn render(&self, renderer: &Renderer, theme: &Theme, processes: &[ProcessInfo]) -> anyhow::Result<()> {
         // Background
         renderer.fill_rect(self.bounds, theme.panel_bg)?;
 
@@ -152,13 +152,18 @@ impl ProcessList {
             ..text_style.clone()
         };
 
-        // Column positions (PID can be 7 digits, ~56px at 11px monospace)
+        // Column positions - adjusted for better spacing
         let x = self.bounds.x as f64;
         let col_pid = x + 8.0;
         let col_name = x + 80.0;
-        let col_cpu = x + 230.0;
-        let col_mem = x + 300.0;
-        let col_user = x + 390.0;
+        let col_cpu = x + 240.0;   // CPU%/Read/Sock
+        let col_mem = x + 310.0;   // Mem%/Write/Listen
+        let col_extra = x + 380.0; // Estab (network only)
+        let col_user = x + 450.0;  // User
+
+        // Show different columns based on sort field
+        let is_disk_sort = matches!(self.sort_field, SortField::DiskRead | SortField::DiskWrite | SortField::DiskTotal);
+        let is_net_sort = matches!(self.sort_field, SortField::NetConnections | SortField::NetTcp | SortField::NetBandwidth);
 
         // Header - position text near top (Pango uses top-left positioning)
         let header_y = self.bounds.y as f64 + 4.0;
@@ -176,13 +181,6 @@ impl ProcessList {
             },
             ..header_style.clone()
         };
-
-        // Show different columns based on sort field
-        let is_disk_sort = matches!(self.sort_field, SortField::DiskRead | SortField::DiskWrite | SortField::DiskTotal);
-        let is_net_sort = matches!(self.sort_field, SortField::NetConnections | SortField::NetTcp | SortField::NetBandwidth);
-
-        // Extra column position for network mode
-        let col_extra = x + 350.0;
 
         if is_disk_sort {
             renderer.text("Read/s", col_cpu, header_y, &sort_style)?;
@@ -216,7 +214,7 @@ impl ProcessList {
 
         // Process rows
         let start_y = self.bounds.y + HEADER_HEIGHT as i32;
-        for (i, process) in self.processes.iter()
+        for (i, process) in processes.iter()
             .skip(self.scroll_offset)
             .take(self.visible_rows)
             .enumerate()
@@ -316,12 +314,12 @@ impl ProcessList {
         }
 
         // Scroll indicator if needed
-        if self.processes.len() > self.visible_rows {
+        if processes.len() > self.visible_rows {
             let scroll_info = format!(
                 "{}-{} of {}",
                 self.scroll_offset + 1,
-                (self.scroll_offset + self.visible_rows).min(self.processes.len()),
-                self.processes.len()
+                (self.scroll_offset + self.visible_rows).min(processes.len()),
+                processes.len()
             );
             let info_style = TextStyle {
                 font_size: 9.0,

@@ -254,7 +254,7 @@ impl App {
         }) {
             if resp.success {
                 self.processes = resp.data.and_then(|d| serde_json::from_value(d).ok()).unwrap_or_default();
-                self.process_list.set_processes(self.processes.clone());
+                self.process_list.set_process_count(self.processes.len());
                 self.process_list.set_sort(sort_field);
             }
         }
@@ -572,8 +572,8 @@ impl App {
             }
         }
 
-        // Render process list
-        self.process_list.render(&self.renderer, &self.theme)?;
+        // Render process list (pass reference, no clone)
+        self.process_list.render(&self.renderer, &self.theme, &self.processes)?;
 
         Ok(())
     }
@@ -620,7 +620,7 @@ impl App {
         self.header = HeaderBar::new(Rect::new(0, 0, width, HEADER_HEIGHT));
         self.tab_bar.set_bounds(Rect::new(0, HEADER_HEIGHT as i32, width, TAB_BAR_HEIGHT));
         self.process_list = Self::create_process_list(width, height);
-        self.process_list.set_processes(self.processes.clone());
+        self.process_list.set_process_count(self.processes.len());
 
         Ok(())
     }
@@ -644,14 +644,14 @@ impl App {
         }
 
         // Check process list
-        if self.process_list.on_click(pos).is_some() {
+        if self.process_list.on_click(pos, &self.processes).is_some() {
             return true;
         }
 
         false
     }
 
-    /// Sort cached processes by the given field and update process list.
+    /// Sort processes in place by the given field (no cloning).
     fn sort_processes(&mut self, sort_field: SortField) {
         match sort_field {
             SortField::Cpu => self.processes.sort_by(|a, b| {
@@ -685,7 +685,6 @@ impl App {
             SortField::Pid => self.processes.sort_by_key(|p| p.pid),
             SortField::Name => self.processes.sort_by(|a, b| a.name.cmp(&b.name)),
         }
-        self.process_list.set_processes(self.processes.clone());
         self.process_list.set_sort(sort_field);
     }
 
