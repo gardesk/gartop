@@ -54,12 +54,12 @@ impl TabBar {
     fn calculate_tab_bounds(bounds: Rect) -> Vec<Rect> {
         let tabs = Tab::all();
         let tab_width = 100u32;
-        let tab_height = bounds.height - 8; // Leave room for padding
+        let tab_height = bounds.height - 6; // Small bottom margin
         let mut result = Vec::with_capacity(tabs.len());
 
         for (i, _) in tabs.iter().enumerate() {
-            let x = bounds.x + 8 + (i as i32 * (tab_width as i32 + 4));
-            let y = bounds.y + 4; // More top padding
+            let x = bounds.x + 12 + (i as i32 * (tab_width as i32 + 8));
+            let y = bounds.y + 2; // Small top margin
             result.push(Rect::new(x, y, tab_width, tab_height));
         }
 
@@ -154,11 +154,12 @@ impl TabBar {
                 ..Default::default()
             };
 
-            // Center text in tab (baseline positioned, so add ~1/3 font height to center)
+            // Position text in tab - use top of tab + offset
             let text = tab.label();
             let text_size = renderer.measure_text(text, &style)?;
             let text_x = tab_rect.x as f64 + (tab_rect.width as f64 - text_size.width as f64) / 2.0;
-            let text_y = tab_rect.y as f64 + (tab_rect.height as f64 / 2.0) + (style.font_size / 3.0);
+            // Position baseline at top + 16px (should put text near vertical center of 24px tab)
+            let text_y = tab_rect.y as f64 + 16.0;
             renderer.text(text, text_x, text_y, &style)?;
 
             // Active indicator line
