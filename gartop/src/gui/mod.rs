@@ -1,10 +1,17 @@
 //! GUI implementation using gartk
 
+mod app;
+mod header;
+pub mod theme;
+
+pub use app::App;
+pub use theme::Theme;
+
 use anyhow::Result;
 
 /// Run the gartop GUI.
 pub async fn run() -> Result<()> {
-    // TODO: Sprint 4 - implement GUI
-    tracing::info!("GUI not yet implemented");
+    let app = App::new()?;
+    app.run()?;
     Ok(())
 }
