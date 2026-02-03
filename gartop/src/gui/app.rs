@@ -54,6 +54,10 @@ pub struct App {
     search_query: String,
     /// Help overlay visible
     show_help: bool,
+    /// Type-to-jump fuzzy pattern
+    jump_pattern: String,
+    /// Last time a jump character was typed (for timeout)
+    jump_time: Option<Instant>,
     status: Option<StatusInfo>,
     cpu_stats: Option<CpuStats>,
     memory_stats: Option<MemoryStats>,
@@ -130,6 +134,8 @@ impl App {
             search_mode: false,
             search_query: String::new(),
             show_help: false,
+            jump_pattern: String::new(),
+            jump_time: None,
             status: None,
             cpu_stats: None,
             memory_stats: None,
@@ -410,19 +416,19 @@ impl App {
 
         let bindings = [
             ("?", "Toggle this help"),
-            ("q / Esc", "Quit / clear search"),
+            ("q / Esc", "Quit / clear"),
             ("", ""),
             ("1-4", "Switch tab"),
             ("Tab", "Cycle tabs"),
             ("", ""),
-            ("j / \u{2193}", "Next process"),
-            ("k / \u{2191}", "Previous process"),
-            ("Home", "First process"),
-            ("End", "Last process"),
+            ("\u{2191} / \u{2193}", "Navigate list"),
+            ("Home / End", "First / last"),
             ("PgUp/PgDn", "Jump 10 rows"),
             ("", ""),
-            ("f", "Freeze list"),
-            ("/", "Search by name"),
+            ("Alt+f", "Freeze list"),
+            ("/", "Search filter"),
+            ("a-z", "Fuzzy jump"),
+            ("Backspace", "Delete jump char"),
             ("", ""),
             ("K", "Kill (SIGTERM)"),
             ("X", "Kill (SIGKILL)"),
@@ -719,6 +725,22 @@ impl App {
             self.renderer.text(&search_text, CONTENT_PADDING as f64, search_y as f64, &search_style)?;
         }
 
+        // Jump pattern indicator (right side, above process list)
+        if !self.jump_pattern.is_empty() {
+            let jump_y = (HEADER_HEIGHT + TAB_BAR_HEIGHT + SECTION_GAP + 20 + GRAPH_HEIGHT + SECTION_GAP) as i32 - 20;
+            let jump_style = TextStyle {
+                font_family: "monospace".to_string(),
+                font_size: 11.0,
+                color: self.theme.network_color,
+                ..Default::default()
+            };
+            let jump_text = format!("jump: {}", self.jump_pattern);
+            // Position on right side
+            let text_width = self.renderer.measure_text(&jump_text, &jump_style)?.width as f64;
+            let jump_x = (self.width as f64) - CONTENT_PADDING as f64 - text_width;
+            self.renderer.text(&jump_text, jump_x, jump_y as f64, &jump_style)?;
+        }
+
         // Filter processes if search query is active
         let display_processes: Vec<ProcessInfo> = if self.search_query.is_empty() {
             self.processes.clone()
@@ -872,6 +894,35 @@ impl App {
         }
     }
 
+    /// Handle type-to-jump fuzzy matching.
+    fn handle_fuzzy_jump(&mut self, c: char) {
+        // Add character to pattern
+        self.jump_pattern.push(c);
+        self.jump_time = Some(Instant::now());
+
+        // Find first fuzzy match
+        if let Some(idx) = self.find_fuzzy_match(&self.jump_pattern) {
+            // Select and scroll to the match
+            if idx < self.processes.len() {
+                let pid = self.processes[idx].pid;
+                self.process_list.select_by_index(idx, pid);
+            }
+        }
+    }
+
+    /// Find first process matching fuzzy pattern.
+    /// Returns index of first match or None.
+    fn find_fuzzy_match(&self, pattern: &str) -> Option<usize> {
+        let pattern_lower = pattern.to_lowercase();
+
+        for (idx, proc) in self.processes.iter().enumerate() {
+            if fuzzy_match(&proc.name.to_lowercase(), &pattern_lower) {
+                return Some(idx);
+            }
+        }
+        None
+    }
+
     /// Run the GUI event loop.
     pub fn run(mut self) -> Result<()> {
         let config = EventLoopConfig {
@@ -956,8 +1007,13 @@ impl App {
                         // Normal mode key handling
                         match key_event.key {
                             Key::Escape => {
-                                if !self.search_query.is_empty() {
-                                    // Clear search filter first
+                                if !self.jump_pattern.is_empty() {
+                                    // Clear jump pattern first
+                                    self.jump_pattern.clear();
+                                    self.jump_time = None;
+                                    ev_loop.request_redraw();
+                                } else if !self.search_query.is_empty() {
+                                    // Clear search filter second
                                     self.search_query.clear();
                                     ev_loop.request_redraw();
                                 } else {
@@ -1015,18 +1071,33 @@ impl App {
                                 self.sort_processes(sort_field);
                                 ev_loop.request_redraw();
                             }
-                            // Freeze mode toggle (pause process list updates)
-                            Key::Char('f') => {
+                            // Freeze mode toggle (Alt+f)
+                            Key::Char('f') if key_event.modifiers.alt => {
                                 self.frozen = !self.frozen;
                                 ev_loop.request_redraw();
                             }
-                            // Process list navigation
-                            Key::Down | Key::Char('j') => {
+                            // Process list navigation (arrow keys only - j/k go to fuzzy jump)
+                            Key::Down => {
                                 self.process_list.select_next(&self.processes);
                                 ev_loop.request_redraw();
                             }
-                            Key::Up | Key::Char('k') => {
+                            Key::Up => {
                                 self.process_list.select_prev(&self.processes);
+                                ev_loop.request_redraw();
+                            }
+                            // Backspace - delete last character from jump pattern
+                            Key::Backspace if !self.jump_pattern.is_empty() => {
+                                self.jump_pattern.pop();
+                                self.jump_time = Some(Instant::now());
+                                // Re-run match with shorter pattern
+                                if !self.jump_pattern.is_empty() {
+                                    if let Some(idx) = self.find_fuzzy_match(&self.jump_pattern.clone()) {
+                                        if idx < self.processes.len() {
+                                            let pid = self.processes[idx].pid;
+                                            self.process_list.select_by_index(idx, pid);
+                                        }
+                                    }
+                                }
                                 ev_loop.request_redraw();
                             }
                             Key::Home => {
@@ -1064,6 +1135,11 @@ impl App {
                                     ev_loop.request_redraw();
                                 }
                             }
+                            // Type-to-jump fuzzy matching (lowercase letters only, no modifiers)
+                            Key::Char(c) if c.is_ascii_lowercase() && !key_event.modifiers.alt && !key_event.modifiers.ctrl => {
+                                self.handle_fuzzy_jump(c);
+                                ev_loop.request_redraw();
+                            }
                             _ => {}
                         }
                     }
@@ -1074,6 +1150,15 @@ impl App {
                 }
 
                 InputEvent::Idle => {
+                    // Clear stale jump pattern (1.5s timeout)
+                    if let Some(t) = self.jump_time {
+                        if t.elapsed().as_millis() > 1500 && !self.jump_pattern.is_empty() {
+                            self.jump_pattern.clear();
+                            self.jump_time = None;
+                            ev_loop.request_redraw();
+                        }
+                    }
+
                     if self.last_refresh.elapsed().as_secs_f64() >= self.refresh_interval {
                         if self.daemon_available {
                             self.refresh_data();
@@ -1147,4 +1232,24 @@ fn format_rate(bytes_per_sec: f64) -> String {
     } else {
         format!("{:.0} B/s", bytes_per_sec)
     }
+}
+
+/// Fuzzy match: check if all characters of pattern appear in target in order.
+/// Example: "grtrm" matches "garterm" because g-a-r-t-e-r-m contains g-r-t-r-m in order.
+fn fuzzy_match(target: &str, pattern: &str) -> bool {
+    let mut pattern_chars = pattern.chars().peekable();
+
+    for c in target.chars() {
+        if let Some(&p) = pattern_chars.peek() {
+            if c == p {
+                pattern_chars.next();
+            }
+        } else {
+            // All pattern chars matched
+            return true;
+        }
+    }
+
+    // Check if all pattern chars were consumed
+    pattern_chars.peek().is_none()
 }

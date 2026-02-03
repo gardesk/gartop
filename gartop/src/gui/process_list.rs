@@ -199,6 +199,21 @@ impl ProcessList {
         self.selected_index = None;
     }
 
+    /// Select by index and PID (for fuzzy jump).
+    pub fn select_by_index(&mut self, idx: usize, pid: i32) {
+        self.last_nav_time = Some(Instant::now());
+        self.cursor_lost = false;
+        self.selected_index = Some(idx);
+        self.selected_pid = Some(pid);
+
+        // Scroll to make selection visible
+        if idx < self.scroll_offset {
+            self.scroll_offset = idx;
+        } else if idx >= self.scroll_offset + self.visible_rows {
+            self.scroll_offset = idx.saturating_sub(self.visible_rows - 1);
+        }
+    }
+
     /// Move selection down by one row.
     pub fn select_next(&mut self, processes: &[ProcessInfo]) {
         if processes.is_empty() {
