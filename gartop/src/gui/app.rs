@@ -13,6 +13,7 @@ use gartk_core::{InputEvent, Key, Point, Rect};
 use gartk_render::{Renderer, TextStyle};
 use gartk_x11::{Connection, EventLoop, EventLoopConfig, Window, WindowConfig};
 use gartop_ipc::{Command, CpuStats, DiskStats, MemoryStats, NetworkStats, ProcessInfo, Response, SortField, StatusInfo, TempStats};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Instant;
@@ -29,6 +30,33 @@ const CONTENT_PADDING: u32 = 16;
 
 /// Vertical gap between sections.
 const SECTION_GAP: u32 = 12;
+
+/// Max history points per process
+const PROCESS_HISTORY_LEN: usize = 60;
+
+/// Per-process CPU/memory history for sparkline graphs.
+struct ProcessHistory {
+    cpu: Vec<f64>,
+    memory: Vec<f64>,
+}
+
+impl ProcessHistory {
+    fn new() -> Self {
+        Self {
+            cpu: Vec::with_capacity(PROCESS_HISTORY_LEN),
+            memory: Vec::with_capacity(PROCESS_HISTORY_LEN),
+        }
+    }
+
+    fn push(&mut self, cpu: f64, memory: f64) {
+        if self.cpu.len() >= PROCESS_HISTORY_LEN {
+            self.cpu.remove(0);
+            self.memory.remove(0);
+        }
+        self.cpu.push(cpu);
+        self.memory.push(memory);
+    }
+}
 
 /// GUI application.
 pub struct App {
@@ -75,6 +103,8 @@ pub struct App {
     network_history: Vec<Vec<NetworkStats>>,
     disk_history: Vec<Vec<DiskStats>>,
     processes: Vec<ProcessInfo>,
+    /// Per-process CPU/memory history for sparkline graphs
+    process_history: HashMap<i32, ProcessHistory>,
 }
 
 impl App {
@@ -170,6 +200,7 @@ impl App {
             network_history: Vec::new(),
             disk_history: Vec::new(),
             processes: Vec::new(),
+            process_history: HashMap::new(),
         })
     }
 
@@ -307,6 +338,18 @@ impl App {
                     // Sync selection - tracks process by PID across list reorders
                     self.process_list.sync_selection(&self.processes);
                     self.process_list.set_sort(sort_field);
+
+                    // Record per-process history for sparklines
+                    for proc in &self.processes {
+                        self.process_history
+                            .entry(proc.pid)
+                            .or_insert_with(ProcessHistory::new)
+                            .push(proc.cpu_percent, proc.memory_percent);
+                    }
+                    // Clean up history for dead processes
+                    let active_pids: std::collections::HashSet<i32> =
+                        self.processes.iter().map(|p| p.pid).collect();
+                    self.process_history.retain(|pid, _| active_pids.contains(pid));
                 }
             }
         }
@@ -736,6 +779,85 @@ impl App {
             ..Default::default()
         };
         self.renderer.text("[K] Kill (SIGTERM)   [X] Kill (SIGKILL)", x, footer_y, &action_style)?;
+
+        // History sparklines (if we have history for this process)
+        if let Some(history) = self.process_history.get(&process.pid) {
+            if history.cpu.len() >= 2 {
+                let spark_y = footer_y - 90.0;
+                let spark_height = 50.0;
+                let spark_width = ((self.width - margin * 2) as f64 - 40.0) / 2.0 - 10.0;
+
+                // CPU sparkline
+                self.renderer.text("CPU History:", x, spark_y - 14.0, &label_style)?;
+                self.render_sparkline(
+                    x, spark_y, spark_width, spark_height,
+                    &history.cpu, self.theme.cpu_color,
+                )?;
+
+                // Memory sparkline
+                let mem_x = x + spark_width + 20.0;
+                self.renderer.text("Memory History:", mem_x, spark_y - 14.0, &label_style)?;
+                self.render_sparkline(
+                    mem_x, spark_y, spark_width, spark_height,
+                    &history.memory, self.theme.memory_color,
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Render a sparkline graph (small inline chart).
+    fn render_sparkline(&self, x: f64, y: f64, w: f64, h: f64, values: &[f64], color: gartk_core::Color) -> Result<()> {
+        if values.is_empty() || w <= 0.0 || h <= 0.0 {
+            return Ok(());
+        }
+
+        let ctx = self.renderer.context()?;
+
+        // Background
+        ctx.set_source_rgba(
+            self.theme.graph_bg.r,
+            self.theme.graph_bg.g,
+            self.theme.graph_bg.b,
+            self.theme.graph_bg.a,
+        );
+        ctx.rectangle(x, y, w, h);
+        let _ = ctx.fill();
+
+        // Find max for scaling (at least 1% to avoid division by zero)
+        let max_val = values.iter().cloned().fold(1.0_f64, f64::max);
+        let scale = h / max_val.max(1.0);
+
+        let step = w / (values.len().saturating_sub(1).max(1)) as f64;
+
+        // Draw filled area
+        ctx.set_source_rgba(color.r, color.g, color.b, 0.3);
+        ctx.move_to(x, y + h);
+        for (i, &val) in values.iter().enumerate() {
+            let px = x + i as f64 * step;
+            let py = y + h - (val * scale);
+            ctx.line_to(px, py);
+        }
+        ctx.line_to(x + (values.len() - 1) as f64 * step, y + h);
+        ctx.close_path();
+        let _ = ctx.fill();
+
+        // Draw line
+        ctx.set_source_rgba(color.r, color.g, color.b, 1.0);
+        ctx.set_line_width(1.5);
+        let mut first = true;
+        for (i, &val) in values.iter().enumerate() {
+            let px = x + i as f64 * step;
+            let py = y + h - (val * scale);
+            if first {
+                ctx.move_to(px, py);
+                first = false;
+            } else {
+                ctx.line_to(px, py);
+            }
+        }
+        let _ = ctx.stroke();
 
         Ok(())
     }
