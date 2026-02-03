@@ -1,11 +1,12 @@
 //! GUI implementation using gartk
 
 mod app;
+mod graph;
 mod header;
 pub mod theme;
 
 pub use app::App;
-pub use theme::Theme;
+pub use graph::{DataSeries, LineGraph};
 
 use anyhow::Result;
 

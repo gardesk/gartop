@@ -1,6 +1,6 @@
 //! GUI application state and event loop
 
-use super::{header::HeaderBar, theme::Theme};
+use super::{graph::{DataSeries, LineGraph}, header::HeaderBar, theme::Theme};
 use anyhow::Result;
 use gartk_core::{InputEvent, Key, Rect};
 use gartk_render::Renderer;
@@ -36,6 +36,8 @@ pub struct App {
     status: Option<StatusInfo>,
     cpu_stats: Option<CpuStats>,
     memory_stats: Option<MemoryStats>,
+    cpu_history: Vec<CpuStats>,
+    memory_history: Vec<MemoryStats>,
 }
 
 impl App {
@@ -91,6 +93,8 @@ impl App {
             status: None,
             cpu_stats: None,
             memory_stats: None,
+            cpu_history: Vec::new(),
+            memory_history: Vec::new(),
         })
     }
 
@@ -156,6 +160,20 @@ impl App {
             }
         }
 
+        // Get CPU history
+        if let Some(resp) = self.send_command(&Command::GetCpuHistory { count: Some(60) }) {
+            if resp.success {
+                self.cpu_history = resp.data.and_then(|d| serde_json::from_value(d).ok()).unwrap_or_default();
+            }
+        }
+
+        // Get memory history
+        if let Some(resp) = self.send_command(&Command::GetMemoryHistory { count: Some(60) }) {
+            if resp.success {
+                self.memory_history = resp.data.and_then(|d| serde_json::from_value(d).ok()).unwrap_or_default();
+            }
+        }
+
         // Update daemon availability based on whether any command succeeded
         self.daemon_available = any_success;
         self.last_refresh = Instant::now();
@@ -200,7 +218,7 @@ impl App {
 
         let style = TextStyle {
             font_family: "monospace".to_string(),
-            font_size: 13.0,
+            font_size: 12.0,
             color: self.theme.text,
             ..Default::default()
         };
@@ -210,44 +228,93 @@ impl App {
             ..style.clone()
         };
 
-        let mut y = bounds.y as f64 + 30.0;
-        let x = 20.0;
-        let line_height = 24.0;
+        let padding = 12;
+        let graph_height = 120u32;
+        let text_line_height = 18.0;
 
         if !self.daemon_available {
             self.renderer.text(
                 "Not connected to daemon",
-                x,
-                y,
+                padding as f64,
+                bounds.y as f64 + 30.0,
                 &TextStyle {
-                    color: self.theme.swap_color, // yellow
+                    color: self.theme.swap_color,
                     ..style.clone()
                 },
             )?;
-            y += line_height;
             self.renderer.text(
                 "Run: gartop daemon",
-                x,
-                y,
+                padding as f64,
+                bounds.y as f64 + 50.0,
                 &dim_style,
             )?;
             return Ok(());
         }
 
-        // CPU info
-        if let Some(cpu) = &self.cpu_stats {
-            self.renderer.text(
-                &format!("CPU Usage: {:.1}%", cpu.usage_percent),
-                x,
-                y,
-                &TextStyle {
-                    color: self.theme.cpu_color,
-                    ..style.clone()
-                },
-            )?;
-            y += line_height;
+        // Get Cairo context for graph rendering
+        let ctx = self.renderer.context()?;
+        let graph = LineGraph::default();
 
-            // Per-core display (first 8 cores max)
+        let mut y = bounds.y + padding as i32;
+        let graph_width = bounds.width - (padding * 2) as u32;
+
+        // CPU Section
+        let cpu_label = if let Some(cpu) = &self.cpu_stats {
+            format!("CPU: {:.1}%", cpu.usage_percent)
+        } else {
+            "CPU: --".to_string()
+        };
+        self.renderer.text(
+            &cpu_label,
+            padding as f64,
+            y as f64 + 14.0,
+            &TextStyle { color: self.theme.cpu_color, ..style.clone() },
+        )?;
+        y += 20;
+
+        // CPU Graph
+        let cpu_rect = Rect::new(padding as i32, y, graph_width, graph_height);
+        let mut cpu_series = DataSeries::new("CPU", self.theme.cpu_color);
+        cpu_series.set_values(self.cpu_history.iter().map(|s| s.usage_percent).collect());
+        graph.render(&ctx, cpu_rect, &[cpu_series], &self.theme);
+        y += graph_height as i32 + padding as i32;
+
+        // Memory Section
+        let mem_label = if let Some(mem) = &self.memory_stats {
+            format!(
+                "Memory: {:.1}% ({} / {})",
+                mem.usage_percent,
+                format_bytes(mem.used),
+                format_bytes(mem.total)
+            )
+        } else {
+            "Memory: --".to_string()
+        };
+        self.renderer.text(
+            &mem_label,
+            padding as f64,
+            y as f64 + 14.0,
+            &TextStyle { color: self.theme.memory_color, ..style.clone() },
+        )?;
+        y += 20;
+
+        // Memory Graph
+        let mem_rect = Rect::new(padding as i32, y, graph_width, graph_height);
+        let mut mem_series = DataSeries::new("Memory", self.theme.memory_color);
+        let mut swap_series = DataSeries::new("Swap", self.theme.swap_color);
+        mem_series.set_values(self.memory_history.iter().map(|s| s.usage_percent).collect());
+        swap_series.set_values(self.memory_history.iter().map(|s| {
+            if s.swap_total > 0 {
+                (s.swap_used as f64 / s.swap_total as f64) * 100.0
+            } else {
+                0.0
+            }
+        }).collect());
+        graph.render(&ctx, mem_rect, &[mem_series, swap_series], &self.theme);
+        y += graph_height as i32 + padding as i32;
+
+        // Additional stats text
+        if let Some(cpu) = &self.cpu_stats {
             let cores_to_show = cpu.per_core.len().min(8);
             let mut core_line = String::from("Cores: ");
             for (i, usage) in cpu.per_core.iter().take(cores_to_show).enumerate() {
@@ -259,59 +326,26 @@ impl App {
             if cpu.per_core.len() > cores_to_show {
                 core_line.push_str(&format!(" (+{} more)", cpu.per_core.len() - cores_to_show));
             }
-            self.renderer.text(&core_line, x, y, &dim_style)?;
-            y += line_height * 1.5;
+            self.renderer.text(&core_line, padding as f64, y as f64 + text_line_height, &dim_style)?;
+            y += text_line_height as i32 + 4;
         }
 
-        // Memory info
         if let Some(mem) = &self.memory_stats {
-            self.renderer.text(
-                &format!(
-                    "Memory: {:.1}% ({} / {})",
-                    mem.usage_percent,
-                    format_bytes(mem.used),
-                    format_bytes(mem.total)
-                ),
-                x,
-                y,
-                &TextStyle {
-                    color: self.theme.memory_color,
-                    ..style.clone()
-                },
-            )?;
-            y += line_height;
-
-            // Calculate swap percentage
             let swap_percent = if mem.swap_total > 0 {
                 (mem.swap_used as f64 / mem.swap_total as f64) * 100.0
             } else {
                 0.0
             };
-
             self.renderer.text(
                 &format!(
-                    "Swap: {:.1}% ({} / {})",
+                    "Swap: {:.1}% ({} / {}) | Available: {}",
                     swap_percent,
                     format_bytes(mem.swap_used),
-                    format_bytes(mem.swap_total)
+                    format_bytes(mem.swap_total),
+                    format_bytes(mem.available)
                 ),
-                x,
-                y,
-                &TextStyle {
-                    color: self.theme.swap_color,
-                    ..style.clone()
-                },
-            )?;
-            y += line_height;
-
-            self.renderer.text(
-                &format!(
-                    "Available: {} | Free: {}",
-                    format_bytes(mem.available),
-                    format_bytes(mem.free)
-                ),
-                x,
-                y,
+                padding as f64,
+                y as f64 + text_line_height,
                 &dim_style,
             )?;
         }
