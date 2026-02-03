@@ -70,6 +70,10 @@ pub enum SortField {
     #[default]
     Cpu,
     Memory,
+    DiskRead,
+    DiskWrite,
+    DiskTotal,
+    NetConnections,
     Pid,
     Name,
 }
@@ -164,6 +168,16 @@ pub struct ProcessInfo {
     pub rss: u64,
     /// Virtual memory size in bytes.
     pub vsize: u64,
+    /// Disk read bytes (cumulative).
+    pub io_read_bytes: u64,
+    /// Disk write bytes (cumulative).
+    pub io_write_bytes: u64,
+    /// Disk read rate in bytes/sec.
+    pub io_read_rate: f64,
+    /// Disk write rate in bytes/sec.
+    pub io_write_rate: f64,
+    /// Number of open network connections (TCP + UDP).
+    pub net_connections: u32,
     /// Process state.
     pub state: String,
     /// User owning the process.

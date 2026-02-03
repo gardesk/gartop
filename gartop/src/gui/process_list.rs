@@ -5,6 +5,25 @@ use gartk_render::{Renderer, TextStyle};
 use gartop_ipc::{ProcessInfo, SortField};
 use super::theme::Theme;
 
+/// Format rate (bytes/second) to human-readable compact string.
+fn format_rate(bytes_per_sec: f64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+
+    if bytes_per_sec >= GIB {
+        format!("{:.1}G", bytes_per_sec / GIB)
+    } else if bytes_per_sec >= MIB {
+        format!("{:.1}M", bytes_per_sec / MIB)
+    } else if bytes_per_sec >= KIB {
+        format!("{:.0}K", bytes_per_sec / KIB)
+    } else if bytes_per_sec > 0.0 {
+        format!("{:.0}B", bytes_per_sec)
+    } else {
+        "0".to_string()
+    }
+}
+
 /// Row height for process list.
 const ROW_HEIGHT: u32 = 22;
 
@@ -151,12 +170,24 @@ impl ProcessList {
             color: match self.sort_field {
                 SortField::Cpu => theme.cpu_color,
                 SortField::Memory => theme.memory_color,
+                SortField::DiskRead | SortField::DiskWrite | SortField::DiskTotal => theme.disk_color,
+                SortField::NetConnections => theme.network_color,
                 _ => theme.text_secondary,
             },
             ..header_style.clone()
         };
 
-        if self.sort_field == SortField::Cpu {
+        // Show different columns based on sort field
+        let is_disk_sort = matches!(self.sort_field, SortField::DiskRead | SortField::DiskWrite | SortField::DiskTotal);
+        let is_net_sort = matches!(self.sort_field, SortField::NetConnections);
+
+        if is_disk_sort {
+            renderer.text("Read/s", col_cpu, header_y, &sort_style)?;
+            renderer.text("Write/s", col_mem, header_y, &sort_style)?;
+        } else if is_net_sort {
+            renderer.text("Sockets", col_cpu, header_y, &sort_style)?;
+            renderer.text("Mem%", col_mem, header_y, &header_style)?;
+        } else if self.sort_field == SortField::Cpu {
             renderer.text("CPU%", col_cpu, header_y, &sort_style)?;
             renderer.text("Mem%", col_mem, header_y, &header_style)?;
         } else {
@@ -209,21 +240,56 @@ impl ProcessList {
             };
             renderer.text(&name, col_name, text_y, &text_style)?;
 
-            // CPU %
-            let cpu_style = if process.cpu_percent > 50.0 {
-                TextStyle { color: theme.cpu_color, ..text_style.clone() }
-            } else {
-                dim_style.clone()
-            };
-            renderer.text(&format!("{:.1}", process.cpu_percent), col_cpu, text_y, &cpu_style)?;
+            // Show CPU/Memory or I/O or Network depending on sort field
+            if is_disk_sort {
+                // Read rate
+                let read_style = if process.io_read_rate > 1_000_000.0 {
+                    TextStyle { color: theme.disk_color, ..text_style.clone() }
+                } else {
+                    dim_style.clone()
+                };
+                renderer.text(&format_rate(process.io_read_rate), col_cpu, text_y, &read_style)?;
 
-            // Memory %
-            let mem_style = if process.memory_percent > 10.0 {
-                TextStyle { color: theme.memory_color, ..text_style.clone() }
+                // Write rate
+                let write_style = if process.io_write_rate > 1_000_000.0 {
+                    TextStyle { color: theme.disk_color, ..text_style.clone() }
+                } else {
+                    dim_style.clone()
+                };
+                renderer.text(&format_rate(process.io_write_rate), col_mem, text_y, &write_style)?;
+            } else if is_net_sort {
+                // Socket count
+                let net_style = if process.net_connections > 10 {
+                    TextStyle { color: theme.network_color, ..text_style.clone() }
+                } else {
+                    dim_style.clone()
+                };
+                renderer.text(&process.net_connections.to_string(), col_cpu, text_y, &net_style)?;
+
+                // Memory %
+                let mem_style = if process.memory_percent > 10.0 {
+                    TextStyle { color: theme.memory_color, ..text_style.clone() }
+                } else {
+                    dim_style.clone()
+                };
+                renderer.text(&format!("{:.1}", process.memory_percent), col_mem, text_y, &mem_style)?;
             } else {
-                dim_style.clone()
-            };
-            renderer.text(&format!("{:.1}", process.memory_percent), col_mem, text_y, &mem_style)?;
+                // CPU %
+                let cpu_style = if process.cpu_percent > 50.0 {
+                    TextStyle { color: theme.cpu_color, ..text_style.clone() }
+                } else {
+                    dim_style.clone()
+                };
+                renderer.text(&format!("{:.1}", process.cpu_percent), col_cpu, text_y, &cpu_style)?;
+
+                // Memory %
+                let mem_style = if process.memory_percent > 10.0 {
+                    TextStyle { color: theme.memory_color, ..text_style.clone() }
+                } else {
+                    dim_style.clone()
+                };
+                renderer.text(&format!("{:.1}", process.memory_percent), col_mem, text_y, &mem_style)?;
+            }
 
             // User
             let user = if process.user.len() > 10 {

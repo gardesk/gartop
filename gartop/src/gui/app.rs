@@ -245,7 +245,8 @@ impl App {
         let sort_field = match self.tab_bar.active() {
             Tab::Cpu => SortField::Cpu,
             Tab::Memory => SortField::Memory,
-            Tab::Network | Tab::Disk => SortField::Cpu, // Default for I/O tabs
+            Tab::Network => SortField::NetConnections,
+            Tab::Disk => SortField::DiskTotal,
         };
         if let Some(resp) = self.send_command(&Command::GetProcesses {
             sort_by: Some(sort_field),
@@ -634,7 +635,8 @@ impl App {
                 let sort_field = match tab {
                     Tab::Cpu => SortField::Cpu,
                     Tab::Memory => SortField::Memory,
-                    Tab::Network | Tab::Disk => SortField::Cpu,
+                    Tab::Network => SortField::NetConnections,
+                    Tab::Disk => SortField::DiskTotal,
                 };
                 self.process_list.set_sort(sort_field);
                 // Force refresh to get re-sorted processes
@@ -740,7 +742,8 @@ impl App {
                             let sort_field = match new_tab {
                                 Tab::Cpu => SortField::Cpu,
                                 Tab::Memory => SortField::Memory,
-                                Tab::Network | Tab::Disk => SortField::Cpu,
+                                Tab::Network => SortField::NetConnections,
+                                Tab::Disk => SortField::DiskTotal,
                             };
                             self.process_list.set_sort(sort_field);
                             self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
