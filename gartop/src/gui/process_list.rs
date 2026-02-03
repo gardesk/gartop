@@ -133,13 +133,13 @@ impl ProcessList {
             ..text_style.clone()
         };
 
-        // Column positions
+        // Column positions (PID can be 7 digits, ~56px at 11px monospace)
         let x = self.bounds.x as f64;
         let col_pid = x + 8.0;
-        let col_name = x + 70.0;
-        let col_cpu = x + 220.0;
-        let col_mem = x + 290.0;
-        let col_user = x + 380.0;
+        let col_name = x + 80.0;
+        let col_cpu = x + 230.0;
+        let col_mem = x + 300.0;
+        let col_user = x + 390.0;
 
         // Header
         let header_y = self.bounds.y as f64 + 16.0;

@@ -23,6 +23,12 @@ const HEADER_HEIGHT: u32 = 40;
 /// Graph height.
 const GRAPH_HEIGHT: u32 = 150;
 
+/// Horizontal content padding.
+const CONTENT_PADDING: u32 = 16;
+
+/// Vertical gap between sections.
+const SECTION_GAP: u32 = 12;
+
 /// Default window dimensions.
 const DEFAULT_WIDTH: u32 = 800;
 const DEFAULT_HEIGHT: u32 = 600;
@@ -87,7 +93,8 @@ impl App {
 
         // Create components
         let header = HeaderBar::new(Rect::new(0, 0, width, HEADER_HEIGHT));
-        let tab_bar = TabBar::new(Rect::new(0, HEADER_HEIGHT as i32, width, TAB_BAR_HEIGHT));
+        let tab_bar_y = HEADER_HEIGHT + 4; // Small gap below header
+        let tab_bar = TabBar::new(Rect::new(0, tab_bar_y as i32, width, TAB_BAR_HEIGHT));
         let process_list = Self::create_process_list(width, height);
 
         // Check if daemon is available
@@ -117,9 +124,12 @@ impl App {
 
     /// Create process list with correct bounds.
     fn create_process_list(width: u32, height: u32) -> ProcessList {
-        let content_start = HEADER_HEIGHT + TAB_BAR_HEIGHT + GRAPH_HEIGHT + 24; // 24 for graph label
+        // Account for: header + gap + tab bar + section gap + graph label + graph + section gap
+        let tab_bar_y = HEADER_HEIGHT + 4;
+        let content_start = tab_bar_y + TAB_BAR_HEIGHT + SECTION_GAP + 20 + GRAPH_HEIGHT + SECTION_GAP;
         let list_height = height.saturating_sub(content_start);
-        ProcessList::new(Rect::new(0, content_start as i32, width, list_height))
+        let list_width = width.saturating_sub(CONTENT_PADDING * 2);
+        ProcessList::new(Rect::new(CONTENT_PADDING as i32, content_start as i32, list_width, list_height))
     }
 
     /// Check if daemon is available by attempting a connection.
@@ -271,8 +281,7 @@ impl App {
 
     /// Render the content for the active tab.
     fn render_tab_content(&self, content_y: i32, _content_height: u32) -> Result<()> {
-        let padding = 12;
-        let graph_width = self.width - (padding * 2) as u32;
+        let graph_width = self.width - (CONTENT_PADDING * 2);
 
         // Get Cairo context for graph rendering
         let ctx = self.renderer.context()?;
@@ -281,7 +290,7 @@ impl App {
             ..LineGraph::default()
         };
 
-        let mut y = content_y + padding as i32;
+        let mut y = content_y + SECTION_GAP as i32;
 
         match self.tab_bar.active() {
             Tab::Cpu => {
@@ -293,7 +302,7 @@ impl App {
                 };
                 self.renderer.text(
                     &cpu_label,
-                    padding as f64,
+                    CONTENT_PADDING as f64,
                     y as f64 + 14.0,
                     &TextStyle {
                         font_family: "monospace".to_string(),
@@ -322,7 +331,7 @@ impl App {
                 y += 20;
 
                 // CPU Graph
-                let graph_rect = Rect::new(padding as i32, y, graph_width, GRAPH_HEIGHT);
+                let graph_rect = Rect::new(CONTENT_PADDING as i32, y, graph_width, GRAPH_HEIGHT);
                 let mut cpu_series = DataSeries::new("CPU", self.theme.cpu_color);
                 cpu_series.set_values(self.cpu_history.iter().map(|s| s.usage_percent).collect());
                 graph.render(&ctx, graph_rect, &[cpu_series], &self.theme);
@@ -342,7 +351,7 @@ impl App {
                 };
                 self.renderer.text(
                     &mem_label,
-                    padding as f64,
+                    CONTENT_PADDING as f64,
                     y as f64 + 14.0,
                     &TextStyle {
                         font_family: "monospace".to_string(),
@@ -375,7 +384,7 @@ impl App {
                 y += 20;
 
                 // Memory Graph
-                let graph_rect = Rect::new(padding as i32, y, graph_width, GRAPH_HEIGHT);
+                let graph_rect = Rect::new(CONTENT_PADDING as i32, y, graph_width, GRAPH_HEIGHT);
                 let mut mem_series = DataSeries::new("Memory", self.theme.memory_color);
                 let mut swap_series = DataSeries::new("Swap", self.theme.swap_color);
                 mem_series.set_values(self.memory_history.iter().map(|s| s.usage_percent).collect());
@@ -436,7 +445,8 @@ impl App {
 
         // Update component bounds
         self.header = HeaderBar::new(Rect::new(0, 0, width, HEADER_HEIGHT));
-        self.tab_bar.set_bounds(Rect::new(0, HEADER_HEIGHT as i32, width, TAB_BAR_HEIGHT));
+        let tab_bar_y = HEADER_HEIGHT + 4;
+        self.tab_bar.set_bounds(Rect::new(0, tab_bar_y as i32, width, TAB_BAR_HEIGHT));
         self.process_list = Self::create_process_list(width, height);
         self.process_list.set_processes(self.processes.clone());
 
