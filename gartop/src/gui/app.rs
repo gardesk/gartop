@@ -45,6 +45,7 @@ pub struct App {
     daemon_available: bool,
     last_refresh: Instant,
     refresh_interval: f64,
+    show_legend: bool,
     status: Option<StatusInfo>,
     cpu_stats: Option<CpuStats>,
     memory_stats: Option<MemoryStats>,
@@ -85,8 +86,9 @@ impl App {
         conn.inner().create_gc(gc, window.id(), &Default::default())?;
         conn.flush()?;
 
-        // Create renderer
-        let theme = Theme::default();
+        // Create renderer and theme
+        let theme = Theme::with_font(config.font_family.clone(), config.font_size);
+        let show_legend = config.show_legend;
         let renderer = Renderer::new(width, height)?;
 
         // Create components
@@ -111,6 +113,7 @@ impl App {
             daemon_available,
             last_refresh: Instant::now() - std::time::Duration::from_secs(10),
             refresh_interval,
+            show_legend,
             status: None,
             cpu_stats: None,
             memory_stats: None,
@@ -284,6 +287,7 @@ impl App {
         let ctx = self.renderer.context()?;
         let graph = LineGraph {
             fill_opacity: 0.25,
+            show_legend: self.show_legend,
             ..LineGraph::default()
         };
 

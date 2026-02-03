@@ -2,7 +2,7 @@
 
 use gartk_core::Color;
 
-/// UI theme colors.
+/// UI theme colors and fonts.
 pub struct Theme {
     pub background: Color,
     pub panel_bg: Color,
@@ -16,6 +16,8 @@ pub struct Theme {
     pub border: Color,
     pub graph_bg: Color,
     pub graph_grid: Color,
+    pub font_family: String,
+    pub font_size: f64,
 }
 
 impl Default for Theme {
@@ -33,6 +35,19 @@ impl Default for Theme {
             border: Color::from_hex("#585b70").unwrap_or(Color::WHITE),
             graph_bg: Color::from_hex("#11111b").unwrap_or(Color::BLACK),
             graph_grid: Color::from_hex("#313244").unwrap_or(Color::BLACK),
+            font_family: "monospace".to_string(),
+            font_size: 12.0,
+        }
+    }
+}
+
+impl Theme {
+    /// Create theme with custom font settings.
+    pub fn with_font(font_family: String, font_size: f64) -> Self {
+        Self {
+            font_family,
+            font_size,
+            ..Self::default()
         }
     }
 }
