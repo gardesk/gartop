@@ -13,6 +13,7 @@ pub struct HeaderBar {
     net_rate: f64,   // Combined rx+tx bytes/sec
     disk_rate: f64,  // Combined read+write bytes/sec
     max_temp: Option<f64>,  // Maximum temperature reading
+    gpu_usage: Option<f64>,  // GPU utilization percentage
 }
 
 impl HeaderBar {
@@ -26,6 +27,7 @@ impl HeaderBar {
             net_rate: 0.0,
             disk_rate: 0.0,
             max_temp: None,
+            gpu_usage: None,
         }
     }
 
@@ -41,6 +43,11 @@ impl HeaderBar {
     /// Update temperature reading.
     pub fn update_temp(&mut self, max_temp: Option<f64>) {
         self.max_temp = max_temp;
+    }
+
+    /// Update GPU usage.
+    pub fn update_gpu(&mut self, gpu_usage: Option<f64>) {
+        self.gpu_usage = gpu_usage;
     }
 
     /// Render the header bar.
@@ -104,6 +111,15 @@ impl HeaderBar {
             ..stats_style.clone()
         };
 
+        // GPU indicator (if available)
+        let gpu_text = self.gpu_usage
+            .map(|u| format!("GPU: {:.0}%", u))
+            .unwrap_or_default();
+        let gpu_style = TextStyle {
+            color: theme.gpu_color,
+            ..stats_style.clone()
+        };
+
         // Uptime
         let uptime_text = format!("up {}", self.uptime);
 
@@ -113,6 +129,11 @@ impl HeaderBar {
         let y = self.bounds.y as f64 + (self.bounds.height as f64 * 0.4) + 6.0;
 
         let uptime_width = renderer.measure_text(&uptime_text, &stats_style)?.width as f64;
+        let gpu_width = if self.gpu_usage.is_some() {
+            renderer.measure_text(&gpu_text, &gpu_style)?.width as f64
+        } else {
+            0.0
+        };
         let temp_width = if self.max_temp.is_some() {
             renderer.measure_text(&temp_text, &temp_style)?.width as f64
         } else {
@@ -126,10 +147,15 @@ impl HeaderBar {
         let right_edge = (self.bounds.x + self.bounds.width as i32) as f64;
 
         let uptime_x = right_edge - right_margin - uptime_width;
-        let temp_x = if self.max_temp.is_some() {
-            uptime_x - spacing - temp_width
+        let gpu_x = if self.gpu_usage.is_some() {
+            uptime_x - spacing - gpu_width
         } else {
             uptime_x
+        };
+        let temp_x = if self.max_temp.is_some() {
+            gpu_x - spacing - temp_width
+        } else {
+            gpu_x
         };
         let disk_x = temp_x - spacing - disk_width;
         let net_x = disk_x - spacing - net_width;
@@ -142,6 +168,9 @@ impl HeaderBar {
         renderer.text(&disk_text, disk_x, y, &disk_style)?;
         if self.max_temp.is_some() {
             renderer.text(&temp_text, temp_x, y, &temp_style)?;
+        }
+        if self.gpu_usage.is_some() {
+            renderer.text(&gpu_text, gpu_x, y, &gpu_style)?;
         }
         renderer.text(&uptime_text, uptime_x, y, &stats_style)?;
 
