@@ -242,6 +242,9 @@ impl ProcessCollector {
         let net_listen = net_stats.listen_count;
         let net_established = net_stats.established_count;
 
+        // Detect container
+        let container = Self::detect_container(proc);
+
         Ok(ProcessInfo {
             pid,
             ppid: stat.ppid,
@@ -264,7 +267,61 @@ impl ProcessCollector {
             net_tx_rate,
             state,
             user,
+            container,
         })
+    }
+
+    /// Detect if a process is running in a container.
+    /// Returns a short container ID (first 12 chars) if detected.
+    fn detect_container(proc: &Process) -> Option<String> {
+        // Read cgroup info
+        let cgroups = proc.cgroups().ok()?;
+
+        for cg in cgroups {
+            let path = cg.pathname;
+
+            // Docker containers: /docker/<container_id> or /docker/<container_id>/...
+            if let Some(rest) = path.strip_prefix("/docker/") {
+                let id = rest.split('/').next().unwrap_or("");
+                if id.len() >= 12 {
+                    return Some(format!("docker:{}", &id[..12]));
+                }
+            }
+
+            // Podman containers: /libpod-<container_id>.scope or similar
+            if path.contains("/libpod-") {
+                if let Some(start) = path.find("/libpod-") {
+                    let rest = &path[start + 8..];
+                    if let Some(end) = rest.find('.') {
+                        let id = &rest[..end];
+                        if id.len() >= 12 {
+                            return Some(format!("podman:{}", &id[..12]));
+                        }
+                    }
+                }
+            }
+
+            // containerd/k8s: /kubepods/... or cri-containerd-<id>
+            if path.contains("/kubepods") {
+                // Extract container ID from kubernetes cgroup path
+                if let Some(start) = path.rfind('/') {
+                    let id = &path[start + 1..];
+                    if id.len() >= 12 {
+                        return Some(format!("k8s:{}", &id[..12.min(id.len())]));
+                    }
+                }
+            }
+
+            // LXC containers: /lxc/<name>
+            if let Some(rest) = path.strip_prefix("/lxc/") {
+                let name = rest.split('/').next().unwrap_or("");
+                if !name.is_empty() {
+                    return Some(format!("lxc:{}", name));
+                }
+            }
+        }
+
+        None
     }
 
     /// Kill a process by PID.
