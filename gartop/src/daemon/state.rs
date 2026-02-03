@@ -1,8 +1,8 @@
 //! Daemon state management
 
-use crate::collector::{CpuCollector, DiskCollector, History, MemoryCollector, NetworkCollector, ProcessCollector, TempCollector};
+use crate::collector::{CpuCollector, DiskCollector, GpuCollector, History, MemoryCollector, NetworkCollector, ProcessCollector, TempCollector};
 use crate::error::Result;
-use gartop_ipc::{CpuStats, DiskStats, MemoryStats, NetworkStats, ProcessInfo, SortField, TempStats};
+use gartop_ipc::{CpuStats, DiskStats, GpuStats, MemoryStats, NetworkStats, ProcessInfo, SortField, TempStats};
 use procfs::Current;
 use std::time::Instant;
 
@@ -14,12 +14,14 @@ pub struct DaemonState {
     pub disk_collector: DiskCollector,
     pub process_collector: ProcessCollector,
     pub temp_collector: TempCollector,
+    pub gpu_collector: GpuCollector,
     pub cpu_history: History<CpuStats>,
     pub memory_history: History<MemoryStats>,
     pub network_history: History<Vec<NetworkStats>>,
     pub disk_history: History<Vec<DiskStats>>,
     pub processes: Vec<ProcessInfo>,
     pub temp_stats: Option<TempStats>,
+    pub gpu_stats: Option<GpuStats>,
     pub started: Instant,
     pub sample_interval_ms: u64,
 }
@@ -34,12 +36,14 @@ impl DaemonState {
             disk_collector: DiskCollector::new(),
             process_collector: ProcessCollector::new()?,
             temp_collector: TempCollector::new()?,
+            gpu_collector: GpuCollector::new()?,
             cpu_history: History::new(history_size),
             memory_history: History::new(history_size),
             network_history: History::new(history_size),
             disk_history: History::new(history_size),
             processes: Vec::new(),
             temp_stats: None,
+            gpu_stats: None,
             started: Instant::now(),
             sample_interval_ms,
         })
@@ -77,6 +81,13 @@ impl DaemonState {
     pub fn collect_temperature(&mut self) -> Result<TempStats> {
         let stats = self.temp_collector.collect()?;
         self.temp_stats = Some(stats.clone());
+        Ok(stats)
+    }
+
+    /// Collect GPU stats (no history, just current values).
+    pub fn collect_gpu(&mut self) -> Result<GpuStats> {
+        let stats = self.gpu_collector.collect()?;
+        self.gpu_stats = Some(stats.clone());
         Ok(stats)
     }
 
