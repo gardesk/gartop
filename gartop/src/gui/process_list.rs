@@ -505,19 +505,41 @@ impl ProcessList {
             // PID
             renderer.text(&process.pid.to_string(), col_pid, text_y, &dim_style)?;
 
-            // Name with tree prefix
+            // Container indicator prefix
+            let container_prefix = process.container.as_ref().map(|c| {
+                if c.starts_with("docker:") { "🐳" }
+                else if c.starts_with("podman:") { "🦭" }
+                else if c.starts_with("k8s:") { "☸" }
+                else if c.starts_with("lxc:") { "📦" }
+                else { "" }
+            }).unwrap_or("");
+
+            // Name with tree prefix and container indicator
             let name_with_prefix = if tree_view && indent > 0 {
-                let prefix = "  ".repeat(indent.saturating_sub(1)) + "├─";
-                let max_name_len = 18usize.saturating_sub(prefix.len());
-                if process.name.len() > max_name_len {
-                    format!("{}{:.width$}..", prefix, process.name, width = max_name_len.saturating_sub(2))
+                let tree_prefix = "  ".repeat(indent.saturating_sub(1)) + "├─";
+                let full_prefix = if container_prefix.is_empty() {
+                    tree_prefix
                 } else {
-                    format!("{}{}", prefix, process.name)
+                    format!("{}{}", container_prefix, tree_prefix)
+                };
+                let max_name_len = 18usize.saturating_sub(full_prefix.chars().count());
+                if process.name.len() > max_name_len {
+                    format!("{}{:.width$}..", full_prefix, process.name, width = max_name_len.saturating_sub(2))
+                } else {
+                    format!("{}{}", full_prefix, process.name)
                 }
-            } else if process.name.len() > 18 {
-                format!("{}...", &process.name[..15])
             } else {
-                process.name.clone()
+                let display_name = if !container_prefix.is_empty() {
+                    format!("{}{}", container_prefix, process.name)
+                } else {
+                    process.name.clone()
+                };
+                if display_name.chars().count() > 18 {
+                    let truncated: String = display_name.chars().take(15).collect();
+                    format!("{}...", truncated)
+                } else {
+                    display_name
+                }
             };
             renderer.text(&name_with_prefix, col_name, text_y, &text_style)?;
 
