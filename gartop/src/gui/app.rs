@@ -46,6 +46,12 @@ pub struct App {
     last_refresh: Instant,
     refresh_interval: f64,
     show_legend: bool,
+    /// Freeze mode - pause process list updates for navigation
+    frozen: bool,
+    /// Search mode - filter processes by name
+    search_mode: bool,
+    /// Search query string
+    search_query: String,
     status: Option<StatusInfo>,
     cpu_stats: Option<CpuStats>,
     memory_stats: Option<MemoryStats>,
@@ -118,6 +124,9 @@ impl App {
             last_refresh: Instant::now() - std::time::Duration::from_secs(10),
             refresh_interval,
             show_legend,
+            frozen: false,
+            search_mode: false,
+            search_query: String::new(),
             status: None,
             cpu_stats: None,
             memory_stats: None,
@@ -241,21 +250,24 @@ impl App {
             }
         }
 
-        // Get processes sorted by current tab's resource
-        let sort_field = match self.tab_bar.active() {
-            Tab::Cpu => SortField::Cpu,
-            Tab::Memory => SortField::Memory,
-            Tab::Network => SortField::NetConnections,
-            Tab::Disk => SortField::DiskTotal,
-        };
-        if let Some(resp) = self.send_command(&Command::GetProcesses {
-            sort_by: Some(sort_field),
-            limit: Some(100),
-        }) {
-            if resp.success {
-                self.processes = resp.data.and_then(|d| serde_json::from_value(d).ok()).unwrap_or_default();
-                self.process_list.set_process_count(self.processes.len());
-                self.process_list.set_sort(sort_field);
+        // Get processes sorted by current tab's resource (skip when frozen)
+        if !self.frozen {
+            let sort_field = match self.tab_bar.active() {
+                Tab::Cpu => SortField::Cpu,
+                Tab::Memory => SortField::Memory,
+                Tab::Network => SortField::NetConnections,
+                Tab::Disk => SortField::DiskTotal,
+            };
+            if let Some(resp) = self.send_command(&Command::GetProcesses {
+                sort_by: Some(sort_field),
+                limit: Some(100),
+            }) {
+                if resp.success {
+                    self.processes = resp.data.and_then(|d| serde_json::from_value(d).ok()).unwrap_or_default();
+                    // Sync selection - tracks process by PID across list reorders
+                    self.process_list.sync_selection(&self.processes);
+                    self.process_list.set_sort(sort_field);
+                }
             }
         }
 
@@ -292,6 +304,17 @@ impl App {
 
         // Render header
         self.header.render(&self.renderer, &self.theme)?;
+
+        // Freeze indicator
+        if self.frozen {
+            let freeze_style = TextStyle {
+                font_family: "monospace".to_string(),
+                font_size: 10.0,
+                color: self.theme.swap_color,
+                ..Default::default()
+            };
+            self.renderer.text("PAUSED", 80.0, (HEADER_HEIGHT as f64 * 0.4) + 6.0, &freeze_style)?;
+        }
 
         // Render tab bar
         self.tab_bar.render(&self.renderer, &self.theme)?;
@@ -583,8 +606,34 @@ impl App {
             }
         }
 
-        // Render process list (pass reference, no clone)
-        self.process_list.render(&self.renderer, &self.theme, &self.processes)?;
+        // Search bar (above process list when active)
+        if self.search_mode || !self.search_query.is_empty() {
+            let search_y = (HEADER_HEIGHT + TAB_BAR_HEIGHT + SECTION_GAP + 20 + GRAPH_HEIGHT + SECTION_GAP) as i32 - 20;
+            let search_style = TextStyle {
+                font_family: "monospace".to_string(),
+                font_size: 11.0,
+                color: if self.search_mode { self.theme.text } else { self.theme.text_secondary },
+                ..Default::default()
+            };
+            let search_text = format!("/{}{}", self.search_query, if self.search_mode { "_" } else { "" });
+            self.renderer.text(&search_text, CONTENT_PADDING as f64, search_y as f64, &search_style)?;
+        }
+
+        // Filter processes if search query is active
+        let display_processes: Vec<ProcessInfo> = if self.search_query.is_empty() {
+            self.processes.clone()
+        } else {
+            let query = self.search_query.to_lowercase();
+            self.processes
+                .iter()
+                .filter(|p| p.name.to_lowercase().contains(&query) ||
+                           p.cmdline.to_lowercase().contains(&query))
+                .cloned()
+                .collect()
+        };
+
+        // Render process list with filtered processes
+        self.process_list.render(&self.renderer, &self.theme, &display_processes)?;
 
         Ok(())
     }
@@ -705,6 +754,24 @@ impl App {
         true
     }
 
+    /// Kill a process by PID.
+    fn kill_process(&mut self, pid: i32, signal: i32) {
+        tracing::info!("Sending signal {} to process {}", signal, pid);
+        if let Some(resp) = self.send_command(&Command::KillProcess {
+            pid,
+            signal: Some(signal),
+        }) {
+            if resp.success {
+                tracing::info!("Process {} killed", pid);
+                // Clear selection and trigger refresh
+                self.process_list.clear_selection();
+                self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+            } else {
+                tracing::warn!("Failed to kill process {}: {:?}", pid, resp.error);
+            }
+        }
+    }
+
     /// Run the GUI event loop.
     pub fn run(mut self) -> Result<()> {
         let config = EventLoopConfig {
@@ -748,51 +815,143 @@ impl App {
                 }
 
                 InputEvent::Key(key_event) if key_event.pressed => {
-                    match key_event.key {
-                        Key::Escape | Key::Char('q') => {
-                            self.should_quit = true;
+                    // Search mode input handling
+                    if self.search_mode {
+                        match key_event.key {
+                            Key::Escape => {
+                                if self.search_query.is_empty() {
+                                    self.search_mode = false;
+                                } else {
+                                    self.search_query.clear();
+                                }
+                                ev_loop.request_redraw();
+                            }
+                            Key::Return => {
+                                self.search_mode = false;
+                                ev_loop.request_redraw();
+                            }
+                            Key::Backspace => {
+                                self.search_query.pop();
+                                ev_loop.request_redraw();
+                            }
+                            Key::Char(c) => {
+                                if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                                    self.search_query.push(c);
+                                    ev_loop.request_redraw();
+                                }
+                            }
+                            _ => {}
                         }
-                        Key::Char('r') => {
-                            self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                    } else {
+                        // Normal mode key handling
+                        match key_event.key {
+                            Key::Escape => {
+                                if !self.search_query.is_empty() {
+                                    // Clear search filter first
+                                    self.search_query.clear();
+                                    ev_loop.request_redraw();
+                                } else {
+                                    self.should_quit = true;
+                                }
+                            }
+                            Key::Char('q') => {
+                                self.should_quit = true;
+                            }
+                            Key::Char('/') => {
+                                self.search_mode = true;
+                                ev_loop.request_redraw();
+                            }
+                            Key::Char('r') => {
+                                self.last_refresh = Instant::now() - std::time::Duration::from_secs(10);
+                            }
+                            Key::Char('1') => {
+                                self.tab_bar.set_active(Tab::Cpu);
+                                self.sort_processes(SortField::Cpu);
+                                ev_loop.request_redraw();
+                            }
+                            Key::Char('2') => {
+                                self.tab_bar.set_active(Tab::Memory);
+                                self.sort_processes(SortField::Memory);
+                                ev_loop.request_redraw();
+                            }
+                            Key::Char('3') => {
+                                self.tab_bar.set_active(Tab::Network);
+                                self.sort_processes(SortField::NetConnections);
+                                ev_loop.request_redraw();
+                            }
+                            Key::Char('4') => {
+                                self.tab_bar.set_active(Tab::Disk);
+                                self.sort_processes(SortField::DiskTotal);
+                                ev_loop.request_redraw();
+                            }
+                            Key::Tab => {
+                                let new_tab = match self.tab_bar.active() {
+                                    Tab::Cpu => Tab::Memory,
+                                    Tab::Memory => Tab::Network,
+                                    Tab::Network => Tab::Disk,
+                                    Tab::Disk => Tab::Cpu,
+                                };
+                                self.tab_bar.set_active(new_tab);
+                                let sort_field = match new_tab {
+                                    Tab::Cpu => SortField::Cpu,
+                                    Tab::Memory => SortField::Memory,
+                                    Tab::Network => SortField::NetConnections,
+                                    Tab::Disk => SortField::DiskTotal,
+                                };
+                                self.sort_processes(sort_field);
+                                ev_loop.request_redraw();
+                            }
+                            // Freeze mode toggle (pause process list updates)
+                            Key::Char('f') => {
+                                self.frozen = !self.frozen;
+                                ev_loop.request_redraw();
+                            }
+                            // Process list navigation
+                            Key::Down | Key::Char('j') => {
+                                self.process_list.select_next(&self.processes);
+                                ev_loop.request_redraw();
+                            }
+                            Key::Up | Key::Char('k') => {
+                                self.process_list.select_prev(&self.processes);
+                                ev_loop.request_redraw();
+                            }
+                            Key::Home => {
+                                self.process_list.select_first(&self.processes);
+                                ev_loop.request_redraw();
+                            }
+                            Key::End => {
+                                self.process_list.select_last(&self.processes);
+                                ev_loop.request_redraw();
+                            }
+                            Key::PageDown => {
+                                // Move selection down by visible rows
+                                for _ in 0..10 {
+                                    self.process_list.select_next(&self.processes);
+                                }
+                                ev_loop.request_redraw();
+                            }
+                            Key::PageUp => {
+                                // Move selection up by visible rows
+                                for _ in 0..10 {
+                                    self.process_list.select_prev(&self.processes);
+                                }
+                                ev_loop.request_redraw();
+                            }
+                            // Kill selected process (K = SIGTERM, X = SIGKILL)
+                            Key::Char('K') => {
+                                if let Some(pid) = self.process_list.selected_pid() {
+                                    self.kill_process(pid, 15); // SIGTERM
+                                    ev_loop.request_redraw();
+                                }
+                            }
+                            Key::Char('X') => {
+                                if let Some(pid) = self.process_list.selected_pid() {
+                                    self.kill_process(pid, 9); // SIGKILL
+                                    ev_loop.request_redraw();
+                                }
+                            }
+                            _ => {}
                         }
-                        Key::Char('1') => {
-                            self.tab_bar.set_active(Tab::Cpu);
-                            self.sort_processes(SortField::Cpu);
-                            ev_loop.request_redraw();
-                        }
-                        Key::Char('2') => {
-                            self.tab_bar.set_active(Tab::Memory);
-                            self.sort_processes(SortField::Memory);
-                            ev_loop.request_redraw();
-                        }
-                        Key::Char('3') => {
-                            self.tab_bar.set_active(Tab::Network);
-                            self.sort_processes(SortField::NetConnections);
-                            ev_loop.request_redraw();
-                        }
-                        Key::Char('4') => {
-                            self.tab_bar.set_active(Tab::Disk);
-                            self.sort_processes(SortField::DiskTotal);
-                            ev_loop.request_redraw();
-                        }
-                        Key::Tab => {
-                            let new_tab = match self.tab_bar.active() {
-                                Tab::Cpu => Tab::Memory,
-                                Tab::Memory => Tab::Network,
-                                Tab::Network => Tab::Disk,
-                                Tab::Disk => Tab::Cpu,
-                            };
-                            self.tab_bar.set_active(new_tab);
-                            let sort_field = match new_tab {
-                                Tab::Cpu => SortField::Cpu,
-                                Tab::Memory => SortField::Memory,
-                                Tab::Network => SortField::NetConnections,
-                                Tab::Disk => SortField::DiskTotal,
-                            };
-                            self.sort_processes(sort_field);
-                            ev_loop.request_redraw();
-                        }
-                        _ => {}
                     }
                 }
 

@@ -74,12 +74,8 @@ impl LineGraph {
         // Background
         fill_rounded_rect(ctx, rect, 4.0, theme.graph_bg);
 
-        // Calculate graph area with margins
-        let (ml, mr, mt, mb) = if self.show_legend {
-            (36.0, 8.0, 8.0, 22.0)
-        } else {
-            (8.0, 8.0, 8.0, 8.0)
-        };
+        // Calculate graph area with margins (legend now inside graph, no extra bottom margin)
+        let (ml, mr, mt, mb) = (36.0, 8.0, 8.0, 8.0);
 
         let gx = x + ml;
         let gy = y + mt;
@@ -100,9 +96,9 @@ impl LineGraph {
             }
         }
 
-        // Draw legend at bottom
+        // Draw legend inside graph area (top-right corner)
         if self.show_legend && !series.is_empty() {
-            self.draw_legend(ctx, series, x, y + h - 18.0, w, theme);
+            self.draw_legend(ctx, series, gx, gy, gw, theme);
         }
     }
 
@@ -209,7 +205,7 @@ impl LineGraph {
         let _ = ctx.stroke();
     }
 
-    fn draw_legend(&self, ctx: &Context, series: &[DataSeries], x: f64, y: f64, w: f64, theme: &Theme) {
+    fn draw_legend(&self, ctx: &Context, series: &[DataSeries], gx: f64, gy: f64, gw: f64, theme: &Theme) {
         let text_renderer = TextRenderer::new();
         let style = TextStyle {
             font_family: "monospace".to_string(),
@@ -218,11 +214,33 @@ impl LineGraph {
             ..Default::default()
         };
 
-        let mut lx = x + 38.0; // Start after Y-axis labels
+        // Calculate total legend width first (right-align)
+        let mut total_width = 0.0;
+        for data in series {
+            let size = text_renderer.measure(ctx, &data.label, &style);
+            total_width += 12.0 + size.width as f64 + 12.0; // box + gap + text + spacing
+        }
+        total_width -= 12.0; // Remove trailing spacing
 
+        // Position at top-right inside graph area
+        let legend_x = gx + gw - total_width - 8.0;
+        let legend_y = gy + 4.0;
+
+        // Draw semi-transparent background for readability
+        ctx.rectangle(legend_x - 4.0, legend_y - 2.0, total_width + 8.0, 16.0);
+        ctx.set_source_rgba(
+            theme.graph_bg.r,
+            theme.graph_bg.g,
+            theme.graph_bg.b,
+            0.85,
+        );
+        let _ = ctx.fill();
+
+        // Draw legend entries
+        let mut lx = legend_x;
         for data in series {
             // Color box
-            ctx.rectangle(lx, y + 3.0, 8.0, 8.0);
+            ctx.rectangle(lx, legend_y + 3.0, 8.0, 8.0);
             ctx.set_source_rgba(
                 data.color.r,
                 data.color.g,
@@ -234,14 +252,9 @@ impl LineGraph {
             lx += 12.0;
 
             // Label
-            text_renderer.draw(ctx, &data.label, lx, y, &style);
+            text_renderer.draw(ctx, &data.label, lx, legend_y, &style);
             let size = text_renderer.measure(ctx, &data.label, &style);
-            lx += size.width as f64 + 16.0;
-
-            // Stop if we run out of space
-            if lx > x + w - 40.0 {
-                break;
-            }
+            lx += size.width as f64 + 12.0;
         }
     }
 }

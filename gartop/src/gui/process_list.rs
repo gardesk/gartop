@@ -31,10 +31,14 @@ const ROW_HEIGHT: u32 = 22;
 const HEADER_HEIGHT: u32 = 24;
 
 /// Process list component - renders process data without owning it.
+/// Tracks selection by PID so cursor follows the process when list reorders.
 pub struct ProcessList {
     bounds: Rect,
     scroll_offset: usize,
-    selected: Option<usize>,
+    /// Selected process PID (tracks process across reorders)
+    selected_pid: Option<i32>,
+    /// Cached index of selected PID (updated on sync)
+    selected_index: Option<usize>,
     sort_field: SortField,
     visible_rows: usize,
     process_count: usize,
@@ -47,7 +51,8 @@ impl ProcessList {
         Self {
             bounds,
             scroll_offset: 0,
-            selected: None,
+            selected_pid: None,
+            selected_index: None,
             sort_field: SortField::Cpu,
             visible_rows,
             process_count: 0,
@@ -60,7 +65,50 @@ impl ProcessList {
         self.visible_rows = ((bounds.height.saturating_sub(HEADER_HEIGHT)) / ROW_HEIGHT) as usize;
     }
 
-    /// Update process count (for scroll calculations).
+    /// Sync selection with updated process list.
+    /// Call this after refreshing process data to update the cursor position.
+    /// Returns true if selection is still valid and visible.
+    pub fn sync_selection(&mut self, processes: &[ProcessInfo]) -> bool {
+        self.process_count = processes.len();
+
+        // Clamp scroll offset
+        if self.scroll_offset > self.max_scroll() {
+            self.scroll_offset = self.max_scroll();
+        }
+
+        // Find the selected PID in the new list
+        if let Some(pid) = self.selected_pid {
+            if let Some(idx) = processes.iter().position(|p| p.pid == pid) {
+                self.selected_index = Some(idx);
+
+                // If process moved out of visible area, scroll to keep it visible
+                // but only if it's still in the first "page" of results
+                if idx < self.visible_rows * 2 {
+                    // Process is near the top, keep tracking
+                    if idx < self.scroll_offset {
+                        self.scroll_offset = idx;
+                    } else if idx >= self.scroll_offset + self.visible_rows {
+                        self.scroll_offset = idx.saturating_sub(self.visible_rows - 1);
+                    }
+                    return true;
+                } else {
+                    // Process moved too far down, clear selection
+                    self.selected_pid = None;
+                    self.selected_index = None;
+                    return false;
+                }
+            } else {
+                // Process no longer exists, clear selection
+                self.selected_pid = None;
+                self.selected_index = None;
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Update process count (for scroll calculations) - legacy method.
     pub fn set_process_count(&mut self, count: usize) {
         self.process_count = count;
         // Clamp scroll offset
@@ -111,21 +159,100 @@ impl ProcessList {
         let process_idx = self.scroll_offset + row;
 
         if process_idx < processes.len() {
-            self.selected = Some(process_idx);
-            return Some(processes[process_idx].pid);
+            let pid = processes[process_idx].pid;
+            self.selected_pid = Some(pid);
+            self.selected_index = Some(process_idx);
+            return Some(pid);
         }
 
         None
     }
 
     /// Get selected process PID.
-    pub fn selected_pid(&self, processes: &[ProcessInfo]) -> Option<i32> {
-        self.selected.and_then(|idx| processes.get(idx).map(|p| p.pid))
+    pub fn selected_pid(&self) -> Option<i32> {
+        self.selected_pid
     }
 
     /// Clear selection.
     pub fn clear_selection(&mut self) {
-        self.selected = None;
+        self.selected_pid = None;
+        self.selected_index = None;
+    }
+
+    /// Move selection down by one row.
+    pub fn select_next(&mut self, processes: &[ProcessInfo]) {
+        if processes.is_empty() {
+            return;
+        }
+        match self.selected_index {
+            None => {
+                // Select first visible item
+                let idx = self.scroll_offset.min(processes.len() - 1);
+                self.selected_index = Some(idx);
+                self.selected_pid = Some(processes[idx].pid);
+            }
+            Some(idx) => {
+                if idx + 1 < processes.len() {
+                    let new_idx = idx + 1;
+                    self.selected_index = Some(new_idx);
+                    self.selected_pid = Some(processes[new_idx].pid);
+                    // Auto-scroll if selection goes below visible area
+                    if new_idx >= self.scroll_offset + self.visible_rows {
+                        self.scroll_offset = (new_idx + 1).saturating_sub(self.visible_rows);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Move selection up by one row.
+    pub fn select_prev(&mut self, processes: &[ProcessInfo]) {
+        if processes.is_empty() {
+            return;
+        }
+        match self.selected_index {
+            None => {
+                // Select first visible item
+                let idx = self.scroll_offset.min(processes.len() - 1);
+                self.selected_index = Some(idx);
+                self.selected_pid = Some(processes[idx].pid);
+            }
+            Some(idx) => {
+                if idx > 0 {
+                    let new_idx = idx - 1;
+                    self.selected_index = Some(new_idx);
+                    self.selected_pid = Some(processes[new_idx].pid);
+                    // Auto-scroll if selection goes above visible area
+                    if new_idx < self.scroll_offset {
+                        self.scroll_offset = new_idx;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Select first item (Home key).
+    pub fn select_first(&mut self, processes: &[ProcessInfo]) {
+        if !processes.is_empty() {
+            self.selected_index = Some(0);
+            self.selected_pid = Some(processes[0].pid);
+            self.scroll_offset = 0;
+        }
+    }
+
+    /// Select last item (End key).
+    pub fn select_last(&mut self, processes: &[ProcessInfo]) {
+        if !processes.is_empty() {
+            let last_idx = processes.len() - 1;
+            self.selected_index = Some(last_idx);
+            self.selected_pid = Some(processes[last_idx].pid);
+            self.scroll_offset = self.max_scroll();
+        }
+    }
+
+    /// Get the currently selected index.
+    pub fn selected_index(&self) -> Option<usize> {
+        self.selected_index
     }
 
     /// Render the process list.
@@ -224,7 +351,7 @@ impl ProcessList {
             let process_idx = self.scroll_offset + i;
 
             // Selection highlight
-            if self.selected == Some(process_idx) {
+            if self.selected_index == Some(process_idx) {
                 let row_rect = Rect::new(
                     self.bounds.x + 2,
                     row_y + 2,
