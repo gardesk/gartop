@@ -1258,13 +1258,8 @@ impl App {
 
     /// Blit surface to window.
     fn blit(&mut self) -> Result<()> {
-        let data = {
-            let surface = self.renderer.surface_mut();
-            let data_ref = surface
-                .data()
-                .map_err(|e| anyhow::anyhow!("Failed to get surface data: {}", e))?;
-            data_ref.to_vec()
-        };
+        let data = self.renderer.pixel_data()
+            .map_err(|e| anyhow::anyhow!("Failed to get surface data: {}", e))?;
 
         let conn = self.window.connection();
         conn.inner().put_image(
@@ -1423,7 +1418,7 @@ impl App {
     pub fn run(mut self) -> Result<()> {
         let config = EventLoopConfig {
             fps: 30,
-            continuous_redraw: false,
+            continuous_redraw: true,
         };
         let mut event_loop = EventLoop::new(&self.window, config)?;
 
@@ -1704,32 +1699,31 @@ impl App {
                     self.should_quit = true;
                 }
 
-                InputEvent::Idle => {
-                    // Clear stale jump pattern (1.5s timeout)
-                    if let Some(t) = self.jump_time {
-                        if t.elapsed().as_millis() > 1500 && !self.jump_pattern.is_empty() {
-                            self.jump_pattern.clear();
-                            self.jump_time = None;
-                            ev_loop.request_redraw();
-                        }
-                    }
-
-                    if self.last_refresh.elapsed().as_secs_f64() >= self.refresh_interval {
-                        if self.daemon_available {
-                            self.refresh_data();
-                            self.update_header();
-                            ev_loop.request_redraw();
-                        } else {
-                            self.daemon_available = Self::check_daemon();
-                            if self.daemon_available {
-                                ev_loop.request_redraw();
-                            }
-                            self.last_refresh = Instant::now();
-                        }
-                    }
-                }
-
                 _ => {}
+            }
+
+            // Periodic tasks (run each frame via continuous_redraw)
+            // Clear stale jump pattern (1.5s timeout)
+            if let Some(t) = self.jump_time {
+                if t.elapsed().as_millis() > 1500 && !self.jump_pattern.is_empty() {
+                    self.jump_pattern.clear();
+                    self.jump_time = None;
+                    ev_loop.request_redraw();
+                }
+            }
+
+            if self.last_refresh.elapsed().as_secs_f64() >= self.refresh_interval {
+                if self.daemon_available {
+                    self.refresh_data();
+                    self.update_header();
+                    ev_loop.request_redraw();
+                } else {
+                    self.daemon_available = Self::check_daemon();
+                    if self.daemon_available {
+                        ev_loop.request_redraw();
+                    }
+                    self.last_refresh = Instant::now();
+                }
             }
 
             if ev_loop.needs_redraw() {
