@@ -113,8 +113,8 @@ impl App {
     pub fn new(config: GuiConfig) -> Result<Self> {
         let conn = Connection::connect(None)?;
 
-        // Get primary monitor for centering
-        let monitor = gartk_x11::primary_monitor(&conn)?;
+        // Get monitor of active window for centering
+        let monitor = gartk_x11::monitor_of_active_window(&conn)?;
 
         let width = config.width.min(monitor.rect.width);
         let height = config.height.min(monitor.rect.height);
